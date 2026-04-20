@@ -269,6 +269,15 @@ class _StatusDot(QtWidgets.QLabel):
         self.setPixmap(pm)
 
 
+_SELECTABLE = QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+
+
+def _selectable(lbl: QtWidgets.QLabel) -> QtWidgets.QLabel:
+    lbl.setTextInteractionFlags(_SELECTABLE)
+    lbl.setCursor(QtCore.Qt.IBeamCursor)
+    return lbl
+
+
 def _badge(text: str) -> QtWidgets.QLabel:
     lbl = QtWidgets.QLabel(text)
     lbl.setProperty("role", "badge")
@@ -322,6 +331,11 @@ class _AssistantRow(QtWidgets.QWidget):
         self._body.document().setDocumentMargin(0)
         self._body.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self._body.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self._body.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse
+            | QtCore.Qt.TextSelectableByKeyboard
+            | QtCore.Qt.LinksAccessibleByMouse
+        )
         self._body.document().contentsChanged.connect(self._auto_size)
         vl.addWidget(self._body)
 
@@ -357,6 +371,7 @@ class _ThinkingRow(QtWidgets.QWidget):
             p = QtWidgets.QLabel(preview[:200])
             p.setProperty("role", "muted")
             p.setWordWrap(True)
+            _selectable(p)
             lay.addWidget(p, 1)
         lay.addStretch(1)
 
@@ -369,6 +384,7 @@ class _SystemRow(QtWidgets.QWidget):
         lbl = QtWidgets.QLabel(text)
         lbl.setProperty("role", "muted")
         lbl.setWordWrap(True)
+        _selectable(lbl)
         lay.addWidget(lbl, 1)
 
 
@@ -383,6 +399,7 @@ class _ErrorRow(QtWidgets.QWidget):
         lbl = QtWidgets.QLabel(text)
         lbl.setStyleSheet(f"color: {ERR};")
         lbl.setWordWrap(True)
+        _selectable(lbl)
         lay.addWidget(lbl, 1)
 
 
@@ -429,11 +446,13 @@ class _ToolEntry(QtWidgets.QWidget):
         header.setSpacing(8)
         title = QtWidgets.QLabel(self._short_name)
         title.setProperty("role", "tool_title")
+        _selectable(title)
         header.addWidget(title)
         if self._summary:
             sub = QtWidgets.QLabel(self._summary)
             sub.setProperty("role", "tool_subtitle")
             sub.setWordWrap(True)
+            _selectable(sub)
             header.addWidget(sub, 1)
         header.addStretch(1)
         col.addLayout(header)
@@ -504,6 +523,7 @@ class _ToolCallCard(QtWidgets.QWidget):
         header.setSpacing(8)
         title = QtWidgets.QLabel(_shorten_tool_name(tool_name))
         title.setProperty("role", "tool_title")
+        _selectable(title)
         header.addWidget(title)
         pending = QtWidgets.QLabel("pending approval")
         pending.setProperty("role", "chip_accent")
@@ -516,6 +536,7 @@ class _ToolCallCard(QtWidgets.QWidget):
             sub = QtWidgets.QLabel(summary)
             sub.setProperty("role", "tool_subtitle")
             sub.setWordWrap(True)
+            _selectable(sub)
             col.addWidget(sub)
 
         in_row = QtWidgets.QHBoxLayout()
@@ -804,13 +825,17 @@ class ChatPanel(QtWidgets.QWidget):
         self._close_assistant()
         self._append(_ErrorRow(message))
 
-    async def request_permission(self, tool_name: str, tool_input: dict) -> Decision:
+    def request_permission_threadsafe(
+        self, tool_name: str, tool_input: dict, cf_future
+    ) -> None:
+        """Create a pending card whose Apply/Reject resolves `cf_future`.
+
+        Called from the Qt GUI thread (via the PanelProxy signal). `cf_future`
+        is a concurrent.futures.Future awaited by the async worker thread.
+        """
         self._close_assistant()
-        loop = asyncio.get_event_loop()
-        future: asyncio.Future = loop.create_future()
-        card = _ToolCallCard(tool_name, tool_input, future)
+        card = _ToolCallCard(tool_name, tool_input, cf_future)
         self._append(card)
-        return await future
 
     # --- Internals ----------------------------------------------------
 
@@ -843,8 +868,7 @@ class ChatPanel(QtWidgets.QWidget):
     def _on_stop_clicked(self) -> None:
         if self._runtime is None:
             return
-        loop = asyncio.get_event_loop()
-        loop.create_task(self._runtime.interrupt())
+        self._runtime.interrupt()
         self._composer.set_busy(False)
 
 

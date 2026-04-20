@@ -1,7 +1,14 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Permission hook bridging the Claude Agent SDK `can_use_tool` callback to the
-inline Apply / Reject cards rendered by ChatPanel."""
+inline Apply / Reject cards rendered by ChatPanel.
 
+The SDK callback runs on the asyncio worker thread; the panel lives on the Qt
+GUI thread. A `concurrent.futures.Future` carries the user's decision back
+across that boundary.
+"""
+
+import asyncio
+import concurrent.futures
 from dataclasses import dataclass
 
 
@@ -22,22 +29,21 @@ class Decision:
     reason: str = ""
 
 
-def make_can_use_tool(panel):
-    """Return a `can_use_tool` coroutine bound to the given ChatPanel.
+def make_can_use_tool(proxy):
+    """Return a `can_use_tool` coroutine that asks the GUI thread via `proxy`.
 
-    The panel is responsible for:
-      * rendering a card for the proposed tool call,
-      * exposing Apply / Reject buttons, and
-      * returning a Decision via an asyncio.Future.
+    `proxy` is a `_PanelProxy` QObject whose `permissionRequest` signal is
+    connected to a slot that creates a card on the panel and resolves the
+    provided concurrent.futures.Future on Apply / Reject.
     """
 
     async def can_use_tool(tool_name, tool_input, context=None):
-        # Fast-path read-only introspection tools.
         if tool_name in READ_ONLY_TOOLS:
             return {"behavior": "allow", "updatedInput": tool_input}
 
-        # Mutating tool: ask the user.
-        decision = await panel.request_permission(tool_name, tool_input)
+        cf: concurrent.futures.Future = concurrent.futures.Future()
+        proxy.permissionRequest.emit(tool_name, tool_input, cf)
+        decision = await asyncio.wrap_future(cf)
         if decision.allowed:
             return {"behavior": "allow", "updatedInput": tool_input}
         return {

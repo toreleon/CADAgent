@@ -315,11 +315,33 @@ async def boolean_op(args):
         "Rotation axis is [ax,ay,az]; angle is in degrees."
     ),
     {
-        "name": str,
-        "position": list,
-        "rotation_axis": list,
-        "rotation_angle": float,
-        "doc": str,
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Target object name."},
+            "position": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3,
+                "description": "[x, y, z] in millimetres.",
+            },
+            "rotation_axis": {
+                "type": "array",
+                "items": {"type": "number"},
+                "minItems": 3,
+                "maxItems": 3,
+                "description": "[ax, ay, az] rotation axis.",
+            },
+            "rotation_angle": {
+                "type": "number",
+                "description": "Rotation angle in degrees.",
+            },
+            "doc": {
+                "type": "string",
+                "description": "Document name (optional).",
+            },
+        },
+        "required": ["name"],
     },
 )
 async def set_placement(args):
@@ -389,7 +411,22 @@ async def recompute_and_fit(args):
 @tool(
     "export_step",
     "Export named objects to a STEP file at the given path.",
-    {"names": list, "path": str, "doc": str},
+    {
+        "type": "object",
+        "properties": {
+            "names": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Object names to export.",
+            },
+            "path": {"type": "string", "description": "Output STEP file path."},
+            "doc": {
+                "type": "string",
+                "description": "Document name (optional; defaults to active).",
+            },
+        },
+        "required": ["names", "path"],
+    },
 )
 async def export_step(args):
     try:
