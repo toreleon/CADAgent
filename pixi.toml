@@ -33,6 +33,7 @@ lxml = "*"
 matplotlib = "*"
 nine = "*"
 ninja = "*"
+nodejs = ">=18"
 noqt5 = "*"
 numpy = ">=1.26,<1.27"
 occt = ">=7.8,<7.9"
@@ -155,6 +156,8 @@ pthreads-win32 = "*"
 
 [pypi-dependencies]
 freecad-stubs = "*"
+claude-agent-sdk = "*"
+qasync = "*"
 
 ## Qt 6 Configuration Presets
 [target.linux-64.tasks]

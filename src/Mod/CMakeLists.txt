@@ -30,6 +30,10 @@ if(BUILD_HELP)
   add_subdirectory(Help)
 endif(BUILD_HELP)
 
+if(BUILD_CADAGENT)
+  add_subdirectory(CADAgent)
+endif(BUILD_CADAGENT)
+
 if(BUILD_IMPORT)
   add_subdirectory(Import)
 endif(BUILD_IMPORT)
