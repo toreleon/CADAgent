@@ -103,6 +103,8 @@ def open_panel() -> None:
     global _RUNTIME
     try:
         _install_asyncio_loop()
+        import gui_thread
+        gui_thread.init_dispatcher()
     except Exception as exc:
         App.Console.PrintError(f"CAD Agent: {exc}\n")
         return

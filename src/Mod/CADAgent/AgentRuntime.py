@@ -47,6 +47,7 @@ finally:
     sys.stderr = _saved_stderr
 
 import tools as cad_tools
+from context import wrap_user_message
 from permissions import Decision, make_can_use_tool
 from prompts import CAD_SYSTEM_PROMPT
 
@@ -188,7 +189,8 @@ class AgentRuntime:
         try:
             await self._ensure_client()
             assert self.client is not None
-            await self.client.query(user_text)
+            wrapped = wrap_user_message(user_text)
+            await self.client.query(wrapped)
             async for msg in self.client.receive_response():
                 self._route_message(msg)
         except Exception as exc:
@@ -222,6 +224,11 @@ class AgentRuntime:
                     self._proxy.toolUse.emit(
                         getattr(block, "id", ""), block.name, block.input
                     )
+                    try:
+                        import tools as _tools
+                        _tools.mark_tool(block.name)
+                    except Exception:
+                        pass
                 elif isinstance(block, ThinkingBlock):
                     self._proxy.thinking.emit(block.thinking)
                 elif isinstance(block, ToolResultBlock):

@@ -20,16 +20,96 @@ except ImportError:
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+import tools_partdesign
+import tools_macros
+import tools_diagnostics
+from gui_thread import run_sync
+import errors
+
+
+_LAST_RESULT: dict[str, Any] = {"tool": None, "summary": None}
+
 
 def _ok(payload: dict) -> dict:
-    return {"content": [{"type": "text", "text": json.dumps(payload)}]}
-
-
-def _err(message: str) -> dict:
-    return {
-        "content": [{"type": "text", "text": json.dumps({"error": message})}],
-        "is_error": True,
+    out = {"ok": True}
+    out.update(payload)
+    text = json.dumps(out, default=str)
+    _LAST_RESULT["summary"] = {
+        "tool": _LAST_RESULT.get("tool"),
+        "ok": True,
+        "created": out.get("created"),
+        "warnings": out.get("warnings"),
     }
+    return {"content": [{"type": "text", "text": text}]}
+
+
+def _err(message: str, **extras) -> dict:
+    """Legacy error path: prefer errors.fail(kind, ...) for new callers."""
+    payload = errors.fail("internal_error", message=message, **extras)
+    try:
+        body = json.loads(payload["content"][0]["text"])
+        _LAST_RESULT["summary"] = {
+            "tool": _LAST_RESULT.get("tool"),
+            "ok": False,
+            "error": body.get("error"),
+        }
+    except Exception:
+        pass
+    return payload
+
+
+def _summarise_result(doc, created: list[str], warnings: list[str] | None = None) -> dict:
+    """Build the closed-loop payload every mutating tool returns.
+
+    `created` is a list of object names produced by the operation. The helper
+    computes bbox / volume / solid validity for the last-created shape-bearing
+    object so the agent can immediately tell whether the operation succeeded.
+    """
+    bbox = None
+    volume = None
+    is_valid = None
+    primary = None
+    if doc is not None:
+        for name in reversed(created or []):
+            obj = doc.getObject(name)
+            if obj is None:
+                continue
+            shape = getattr(obj, "Shape", None)
+            if shape is None:
+                continue
+            primary = obj.Name
+            try:
+                bb = shape.BoundBox
+                bbox = {
+                    "xmin": bb.XMin, "ymin": bb.YMin, "zmin": bb.ZMin,
+                    "xmax": bb.XMax, "ymax": bb.YMax, "zmax": bb.ZMax,
+                    "length": bb.XLength, "width": bb.YLength, "height": bb.ZLength,
+                }
+                volume = float(shape.Volume)
+            except Exception:
+                pass
+            try:
+                is_valid = bool(shape.isValid())
+            except Exception:
+                is_valid = None
+            break
+    return {
+        "created": list(created or []),
+        "primary": primary,
+        "bbox": bbox,
+        "volume": volume,
+        "is_valid_solid": is_valid,
+        "warnings": list(warnings or []),
+    }
+
+
+def mark_tool(name: str) -> None:
+    """Record the last tool the agent invoked (for the context snapshot)."""
+    _LAST_RESULT["tool"] = name
+
+
+def get_last_result_summary() -> dict | None:
+    return _LAST_RESULT.get("summary")
 
 
 def _resolve_doc(doc_name: str | None):
@@ -47,14 +127,28 @@ def _resolve_doc(doc_name: str | None):
 
 
 def _with_transaction(doc, label: str, fn):
-    doc.openTransaction(f"CADAgent: {label}")
-    try:
-        result = fn()
-        doc.commitTransaction()
-        return result
-    except Exception:
-        doc.abortTransaction()
-        raise
+    """Marshal `fn` onto the Qt GUI thread, wrapped in a single undo transaction.
+
+    FreeCAD's document API is not thread-safe — mutating calls from the
+    asyncio worker thread trigger Qt QObject thread-affinity aborts. `run_sync`
+    dispatches the work to the main thread and blocks for the result.
+    """
+    def work():
+        doc.openTransaction(f"CADAgent: {label}")
+        try:
+            result = fn()
+            doc.commitTransaction()
+            return result
+        except Exception:
+            doc.abortTransaction()
+            raise
+
+    return run_sync(work)
+
+
+def _on_gui(fn):
+    """Execute `fn` on the Qt GUI thread; re-raise exceptions on the caller."""
+    return run_sync(fn)
 
 
 def _summarise_object(obj) -> dict:
@@ -86,10 +180,12 @@ def _summarise_object(obj) -> dict:
 
 @tool("list_documents", "List the names of all open FreeCAD documents.", {})
 async def list_documents(args):
-    try:
+    def work():
         names = list(App.listDocuments().keys())
         active = App.ActiveDocument.Name if App.ActiveDocument else None
-        return _ok({"documents": names, "active": active})
+        return {"documents": names, "active": active}
+    try:
+        return _ok(_on_gui(work))
     except Exception as exc:
         return _err(str(exc))
 
@@ -100,17 +196,17 @@ async def list_documents(args):
     {},
 )
 async def get_active_document(args):
-    try:
+    def work():
         doc = App.ActiveDocument
         if doc is None:
-            return _ok({"active": None, "objects": []})
-        return _ok(
-            {
-                "active": doc.Name,
-                "label": doc.Label,
-                "objects": [_summarise_object(o) for o in doc.Objects],
-            }
-        )
+            return {"active": None, "objects": []}
+        return {
+            "active": doc.Name,
+            "label": doc.Label,
+            "objects": [_summarise_object(o) for o in doc.Objects],
+        }
+    try:
+        return _ok(_on_gui(work))
     except Exception as exc:
         return _err(str(exc))
 
@@ -121,9 +217,11 @@ async def get_active_document(args):
     {"name": str},
 )
 async def create_document(args):
-    try:
+    def work():
         doc = App.newDocument(args["name"])
-        return _ok({"name": doc.Name, "label": doc.Label})
+        return {"name": doc.Name, "label": doc.Label}
+    try:
+        return _ok(_on_gui(work))
     except Exception as exc:
         return _err(str(exc))
 
@@ -134,14 +232,14 @@ async def create_document(args):
     {"doc": str},
 )
 async def list_objects(args):
-    try:
+    def work():
         doc = _resolve_doc(args.get("doc"))
-        return _ok(
-            {
-                "doc": doc.Name,
-                "objects": [_summarise_object(o) for o in doc.Objects],
-            }
-        )
+        return {
+            "doc": doc.Name,
+            "objects": [_summarise_object(o) for o in doc.Objects],
+        }
+    try:
+        return _ok(_on_gui(work))
     except Exception as exc:
         return _err(str(exc))
 
@@ -152,11 +250,11 @@ async def list_objects(args):
     {"name": str, "doc": str},
 )
 async def get_object(args):
-    try:
+    def work():
         doc = _resolve_doc(args.get("doc"))
         obj = doc.getObject(args["name"])
         if obj is None:
-            return _err(f"No object named {args['name']!r} in {doc.Name}.")
+            raise ValueError(f"No object named {args['name']!r} in {doc.Name}.")
         info = _summarise_object(obj)
         info["properties"] = {}
         for prop in obj.PropertiesList:
@@ -165,18 +263,22 @@ async def get_object(args):
                 info["properties"][prop] = repr(val)
             except Exception:
                 info["properties"][prop] = "<unreadable>"
-        return _ok(info)
+        return info
+    try:
+        return _ok(_on_gui(work))
     except Exception as exc:
         return _err(str(exc))
 
 
 @tool("get_selection", "Return names of objects currently selected in the GUI.", {})
 async def get_selection(args):
-    try:
+    def work():
         if not _HAS_GUI:
-            return _ok({"selection": []})
+            return {"selection": []}
         sel = Gui.Selection.getSelection()
-        return _ok({"selection": [_summarise_object(o) for o in sel]})
+        return {"selection": [_summarise_object(o) for o in sel]}
+    try:
+        return _ok(_on_gui(work))
     except Exception as exc:
         return _err(str(exc))
 
@@ -200,7 +302,7 @@ async def make_box(args):
             return obj
 
         obj = _with_transaction(doc, f"make_box {name}", _do)
-        return _ok({"created": _summarise_object(obj)})
+        return _ok(_summarise_result(doc, [obj.Name]))
     except Exception as exc:
         return _err(f"{exc}\n{traceback.format_exc()}")
 
@@ -223,7 +325,7 @@ async def make_cylinder(args):
             return obj
 
         obj = _with_transaction(doc, f"make_cylinder {name}", _do)
-        return _ok({"created": _summarise_object(obj)})
+        return _ok(_summarise_result(doc, [obj.Name]))
     except Exception as exc:
         return _err(f"{exc}\n{traceback.format_exc()}")
 
@@ -245,7 +347,7 @@ async def make_sphere(args):
             return obj
 
         obj = _with_transaction(doc, f"make_sphere {name}", _do)
-        return _ok({"created": _summarise_object(obj)})
+        return _ok(_summarise_result(doc, [obj.Name]))
     except Exception as exc:
         return _err(f"{exc}\n{traceback.format_exc()}")
 
@@ -269,7 +371,7 @@ async def make_cone(args):
             return obj
 
         obj = _with_transaction(doc, f"make_cone {name}", _do)
-        return _ok({"created": _summarise_object(obj)})
+        return _ok(_summarise_result(doc, [obj.Name]))
     except Exception as exc:
         return _err(f"{exc}\n{traceback.format_exc()}")
 
@@ -303,7 +405,7 @@ async def boolean_op(args):
             return obj
 
         obj = _with_transaction(doc, f"boolean_{op} {name}", _do)
-        return _ok({"created": _summarise_object(obj)})
+        return _ok(_summarise_result(doc, [obj.Name]))
     except Exception as exc:
         return _err(f"{exc}\n{traceback.format_exc()}")
 
@@ -366,7 +468,9 @@ async def set_placement(args):
             return obj
 
         obj = _with_transaction(doc, f"set_placement {obj.Name}", _do)
-        return _ok({"updated": _summarise_object(obj)})
+        result = _summarise_result(doc, [obj.Name])
+        result["updated"] = obj.Name
+        return _ok(result)
     except Exception as exc:
         return _err(f"{exc}\n{traceback.format_exc()}")
 
@@ -398,12 +502,21 @@ async def delete_object(args):
     {"doc": str},
 )
 async def recompute_and_fit(args):
-    try:
+    def work():
         doc = _resolve_doc(args.get("doc"))
         doc.recompute()
         if _HAS_GUI:
-            Gui.SendMsgToActiveView("ViewFit")
-        return _ok({"recomputed": doc.Name})
+            try:
+                view = Gui.ActiveDocument.ActiveView if Gui.ActiveDocument else None
+                if view is not None and hasattr(view, "fitAll"):
+                    view.fitAll()
+                else:
+                    Gui.SendMsgToActiveView("ViewFit")
+            except Exception:
+                pass
+        return {"recomputed": doc.Name}
+    try:
+        return _ok(_on_gui(work))
     except Exception as exc:
         return _err(str(exc))
 
@@ -429,17 +542,19 @@ async def recompute_and_fit(args):
     },
 )
 async def export_step(args):
-    try:
+    def work():
         doc = _resolve_doc(args.get("doc"))
         objs = []
         for n in args["names"]:
             o = doc.getObject(n)
             if o is None:
-                return _err(f"No object named {n!r}.")
+                raise ValueError(f"No object named {n!r}.")
             objs.append(o)
         import Import  # FreeCAD's STEP/IGES importer/exporter
         Import.export(objs, args["path"])
-        return _ok({"exported": args["path"], "objects": args["names"]})
+        return {"exported": args["path"], "objects": args["names"]}
+    try:
+        return _ok(_on_gui(work))
     except Exception as exc:
         return _err(f"{exc}\n{traceback.format_exc()}")
 
@@ -459,23 +574,30 @@ async def run_python(args):
     label = args.get("label") or "run_python"
     if not code.strip():
         return _err("Empty code.")
-    doc = App.ActiveDocument
-    tx_owner = doc
-    if tx_owner is not None:
-        tx_owner.openTransaction(f"CADAgent: {label}")
+
+    def work():
+        doc = App.ActiveDocument
+        tx_owner = doc
+        if tx_owner is not None:
+            tx_owner.openTransaction(f"CADAgent: {label}")
+        try:
+            if _HAS_GUI:
+                for line in code.splitlines():
+                    Gui.doCommand(line)
+            else:
+                exec(code, {"App": App, "FreeCAD": App})
+            if tx_owner is not None:
+                tx_owner.commitTransaction()
+                tx_owner.recompute()
+            return {"ran": True, "label": label}
+        except Exception:
+            if tx_owner is not None:
+                tx_owner.abortTransaction()
+            raise
+
     try:
-        if _HAS_GUI:
-            for line in code.splitlines():
-                Gui.doCommand(line)
-        else:
-            exec(code, {"App": App, "FreeCAD": App})
-        if tx_owner is not None:
-            tx_owner.commitTransaction()
-            tx_owner.recompute()
-        return _ok({"ran": True, "label": label})
+        return _ok(run_sync(work))
     except Exception as exc:
-        if tx_owner is not None:
-            tx_owner.abortTransaction()
         return _err(f"{exc}\n{traceback.format_exc()}")
 
 
@@ -522,8 +644,19 @@ TOOL_NAMES = [
 
 def build_mcp_server():
     """Create the in-process MCP server exposing CAD tools."""
-    return create_sdk_mcp_server(name="cad", version="0.1.0", tools=TOOL_FUNCS)
+    all_tools = (
+        TOOL_FUNCS
+        + tools_partdesign.TOOL_FUNCS
+        + tools_macros.TOOL_FUNCS
+        + tools_diagnostics.TOOL_FUNCS
+    )
+    return create_sdk_mcp_server(name="cad", version="0.1.0", tools=all_tools)
 
 
 def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]
+    return (
+        [f"mcp__cad__{n}" for n in TOOL_NAMES]
+        + tools_partdesign.allowed_tool_names()
+        + tools_macros.allowed_tool_names()
+        + tools_diagnostics.allowed_tool_names()
+    )

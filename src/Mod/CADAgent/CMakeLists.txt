@@ -13,8 +13,16 @@ SET(CADAgent_SRCS
     Bridge.py
     AgentRuntime.py
     tools.py
+    tools_partdesign.py
+    tools_macros.py
+    tools_diagnostics.py
+    profiles.py
+    errors.py
     permissions.py
     prompts.py
+    gui_thread.py
+    project_memory.py
+    context.py
     dlgPreferencesCADAgent.ui
     Resources/web/index.html
     Resources/web/README.md

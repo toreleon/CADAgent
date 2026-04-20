@@ -18,10 +18,15 @@ except ImportError:
 def _auto_open_panel():
     import traceback
     try:
+        FreeCAD.Console.PrintMessage("CADAgent: auto-open start\n")
         import CADAgent
+        FreeCAD.Console.PrintMessage("CADAgent: module imported\n")
         CADAgent.register_commands()
+        FreeCAD.Console.PrintMessage("CADAgent: commands registered\n")
         CADAgent.add_preferences_page()
+        FreeCAD.Console.PrintMessage("CADAgent: prefs added\n")
         CADAgent.open_panel()
+        FreeCAD.Console.PrintMessage("CADAgent: panel opened\n")
     except Exception as exc:
         FreeCAD.Console.PrintError(
             f"CAD Agent: auto-open failed: {exc}\n"

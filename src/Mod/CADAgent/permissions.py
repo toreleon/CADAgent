@@ -20,7 +20,19 @@ READ_ONLY_TOOLS = {
     "mcp__cad__get_object",
     "mcp__cad__get_selection",
     "mcp__cad__recompute_and_fit",
+    "mcp__cad__read_project_memory",
+    "mcp__cad__get_parameters",
+    # Diagnostics (Slice 4 will add render_view etc).
+    "mcp__cad__verify_sketch",
+    "mcp__cad__verify_feature",
+    "mcp__cad__preview_topology",
+    "mcp__cad__render_view",
 }
+
+
+def is_dry_run(tool_input: dict) -> bool:
+    """Dry-run invocations never touch the document — auto-allow them."""
+    return bool((tool_input or {}).get("dry_run"))
 
 
 @dataclass
@@ -38,7 +50,7 @@ def make_can_use_tool(proxy):
     """
 
     async def can_use_tool(tool_name, tool_input, context=None):
-        if tool_name in READ_ONLY_TOOLS:
+        if tool_name in READ_ONLY_TOOLS or is_dry_run(tool_input):
             return {"behavior": "allow", "updatedInput": tool_input}
 
         cf: concurrent.futures.Future = concurrent.futures.Future()
