@@ -135,7 +135,7 @@ def open_panel() -> None:
     global _RUNTIME
     try:
         _install_asyncio_loop()
-        import gui_thread
+        from agent import gui_thread
         gui_thread.init_dispatcher()
     except Exception as exc:
         App.Console.PrintError(f"CAD Agent: {exc}\n")
@@ -147,15 +147,15 @@ def open_panel() -> None:
 
     if use_web:
         try:
-            import WebChatPanel as ChatPanelMod
+            from agent.ui import web_panel as ChatPanelMod
         except ImportError as exc:
             App.Console.PrintError(
                 f"CAD Agent: web UI unavailable ({exc}); falling back to native panel.\n"
             )
-            import ChatPanel as ChatPanelMod
+            from agent.ui import panel as ChatPanelMod
     else:
-        import ChatPanel as ChatPanelMod
-    import AgentRuntime as AgentRuntimeMod
+        from agent.ui import panel as ChatPanelMod
+    from agent.runtime import AgentRuntime
 
     dock = ChatPanelMod.get_or_create_dock()
     panel = ChatPanelMod.get_panel()
@@ -164,7 +164,7 @@ def open_panel() -> None:
         return
 
     if _RUNTIME is None:
-        _RUNTIME = AgentRuntimeMod.AgentRuntime(panel)
+        _RUNTIME = AgentRuntime(panel)
         panel.attach_runtime(_RUNTIME)
 
     dock.show()

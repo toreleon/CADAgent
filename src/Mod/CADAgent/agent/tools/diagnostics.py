@@ -1,29 +1,4 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-
-# ***************************************************************************
-# *                                                                         *
-# *   Copyright (c) 2026 FreeCAD Project Association <www.freecad.org>      *
-# *                                                                         *
-# *   This file is part of the FreeCAD CAx development system.              *
-# *                                                                         *
-# *   This program is free software; you can redistribute it and/or modify  *
-# *   it under the terms of the GNU Lesser General Public License (LGPL)    *
-# *   as published by the Free Software Foundation; either version 2 of     *
-# *   the License, or (at your option) any later version.                   *
-# *   for detail see the LICENCE text file.                                 *
-# *                                                                         *
-# *   FreeCAD is distributed in the hope that it will be useful,            *
-# *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
-# *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
-# *   GNU Library General Public License for more details.                  *
-# *                                                                         *
-# *   You should have received a copy of the GNU Library General Public     *
-# *   License along with FreeCAD; if not, write to the Free Software        *
-# *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  *
-# *   USA                                                                   *
-# *                                                                         *
-# ***************************************************************************
-
 """Read-only diagnostic tools — verification and vision feedback.
 
 These never mutate the document, so permissions.py auto-approves them. They
@@ -49,25 +24,9 @@ except ImportError:
 
 from claude_agent_sdk import tool
 
-import errors
-from gui_thread import run_sync
-
-
-def _ok(payload: dict) -> dict:
-    out = {"ok": True}
-    out.update(payload)
-    return {"content": [{"type": "text", "text": json.dumps(out, default=str)}]}
-
-
-def _resolve_doc(doc_name):
-    if doc_name:
-        if doc_name not in App.listDocuments():
-            raise ValueError(f"No document named {doc_name!r}.")
-        return App.getDocument(doc_name)
-    doc = App.ActiveDocument
-    if doc is None:
-        raise ValueError("No active document.")
-    return doc
+from .. import errors
+from ..gui_thread import run_sync
+from ._shared import ok, resolve_doc
 
 
 @tool(
@@ -136,7 +95,7 @@ async def render_view(args):
 )
 async def verify_sketch(args):
     def work():
-        doc = _resolve_doc(args.get("doc"))
+        doc = resolve_doc(args.get("doc"))
         sk = doc.getObject(args["sketch"])
         if sk is None:
             return errors.fail("internal_error", message=f"No object {args['sketch']!r}.")
@@ -144,7 +103,7 @@ async def verify_sketch(args):
             sk.solve()
         except Exception:
             pass
-        return _ok({
+        return ok({
             "sketch": sk.Name,
             "dof": int(getattr(sk, "DoF", -1)),
             "malformed": list(getattr(sk, "MalformedConstraints", []) or []),
@@ -164,7 +123,7 @@ async def verify_sketch(args):
 )
 async def verify_feature(args):
     def work():
-        doc = _resolve_doc(args.get("doc"))
+        doc = resolve_doc(args.get("doc"))
         feat = doc.getObject(args["feature"])
         if feat is None:
             return errors.fail("internal_error", message=f"No object {args['feature']!r}.")
@@ -184,7 +143,7 @@ async def verify_feature(args):
                 "face_count": len(shape.Faces),
                 "edge_count": len(shape.Edges),
             })
-        return _ok(info)
+        return ok(info)
     try:
         return run_sync(work)
     except Exception as exc:
@@ -202,13 +161,13 @@ async def verify_feature(args):
 )
 async def preview_topology(args):
     def work():
-        doc = _resolve_doc(args.get("doc"))
+        doc = resolve_doc(args.get("doc"))
         feat = doc.getObject(args["feature"])
         if feat is None:
             return errors.fail("internal_error", message=f"No object {args['feature']!r}.")
         shape = getattr(feat, "Shape", None)
         if shape is None:
-            return _ok({"feature": feat.Name, "faces": [], "edges": []})
+            return ok({"feature": feat.Name, "faces": [], "edges": []})
         limit = int(args.get("max_items") or 40)
         faces = []
         for idx, face in enumerate(shape.Faces[:limit], start=1):
@@ -230,7 +189,7 @@ async def preview_topology(args):
                 "ref": f"{feat.Name}.Edge{idx}",
                 "length": float(edge.Length),
             })
-        return _ok({"feature": feat.Name, "faces": faces, "edges": edges})
+        return ok({"feature": feat.Name, "faces": faces, "edges": edges})
     try:
         return run_sync(work)
     except Exception as exc:
