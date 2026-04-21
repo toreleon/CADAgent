@@ -1,9 +1,35 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
+
+# ***************************************************************************
+# *                                                                         *
+# *   Copyright (c) 2026 FreeCAD Project Association <www.freecad.org>      *
+# *                                                                         *
+# *   This file is part of the FreeCAD CAx development system.              *
+# *                                                                         *
+# *   This program is free software; you can redistribute it and/or modify  *
+# *   it under the terms of the GNU Lesser General Public License (LGPL)    *
+# *   as published by the Free Software Foundation; either version 2 of     *
+# *   the License, or (at your option) any later version.                   *
+# *   for detail see the LICENCE text file.                                 *
+# *                                                                         *
+# *   FreeCAD is distributed in the hope that it will be useful,            *
+# *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+# *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+# *   GNU Library General Public License for more details.                  *
+# *                                                                         *
+# *   You should have received a copy of the GNU Library General Public     *
+# *   License along with FreeCAD; if not, write to the Free Software        *
+# *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  *
+# *   USA                                                                   *
+# *                                                                         *
+# ***************************************************************************
 """Claude Code-style chat panel for FreeCAD.
 
 Dark canvas, flush rows (no bubbles), status-dot + IN/OUT badged tool blocks,
 and a rounded composer with a circular accent send button.
 """
+
+from __future__ import annotations
 
 import asyncio
 import html
@@ -21,6 +47,9 @@ except ImportError:
         from PySide2 import QtCore, QtGui, QtWidgets
 
 from permissions import Decision
+
+
+translate = App.Qt.translate
 
 
 DOCK_OBJECT_NAME = "CADAgentChatDock"
@@ -229,6 +258,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
 
 
 def _mw():
+    """Return the FreeCAD main window."""
     return Gui.getMainWindow()
 
 
@@ -273,12 +303,14 @@ _SELECTABLE = QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboa
 
 
 def _selectable(lbl: QtWidgets.QLabel) -> QtWidgets.QLabel:
+    """Make a label's text selectable with a text cursor."""
     lbl.setTextInteractionFlags(_SELECTABLE)
     lbl.setCursor(QtCore.Qt.IBeamCursor)
     return lbl
 
 
 def _badge(text: str) -> QtWidgets.QLabel:
+    """Return a small monospace badge label."""
     lbl = QtWidgets.QLabel(text)
     lbl.setProperty("role", "badge")
     lbl.setAlignment(QtCore.Qt.AlignCenter)
@@ -287,6 +319,7 @@ def _badge(text: str) -> QtWidgets.QLabel:
 
 
 def _chip(text: str, accent: bool = False) -> QtWidgets.QLabel:
+    """Return a rounded chip-style label."""
     lbl = QtWidgets.QLabel(text)
     lbl.setProperty("role", "chip_accent" if accent else "chip")
     return lbl
@@ -318,7 +351,7 @@ class _UserRow(QtWidgets.QWidget):
         fl.setContentsMargins(10, 6, 10, 8)
         fl.setSpacing(2)
 
-        tag = QtWidgets.QLabel("YOU")
+        tag = QtWidgets.QLabel(translate("CADAgent", "YOU"))
         tag.setStyleSheet(
             f"color: {FG_MUTED}; font-size: 9px; font-weight: 700;"
             f"letter-spacing: 1px; background: transparent; border: none;"
@@ -338,7 +371,7 @@ class _UserRow(QtWidgets.QWidget):
 
 
 class _AssistantRow(QtWidgets.QWidget):
-    """Flowing assistant text — flush left, markdown-rendered."""
+    """Flowing assistant text - flush left, markdown-rendered."""
 
     _DOC_STYLE = (
         f"pre, code {{ background: {BG_CODE}; color: {FG};"
@@ -410,7 +443,7 @@ class _ThinkingRow(QtWidgets.QWidget):
 
         self._expanded = True
 
-        self._header = QtWidgets.QPushButton("▾  Thinking")
+        self._header = QtWidgets.QPushButton(translate("CADAgent", "▾  Thinking"))
         self._header.setCursor(QtCore.Qt.PointingHandCursor)
         self._header.setStyleSheet(
             f"QPushButton {{ background: transparent; border: none;"
@@ -441,7 +474,8 @@ class _ThinkingRow(QtWidgets.QWidget):
     def set_expanded(self, expanded: bool) -> None:
         self._expanded = expanded
         self._body.setVisible(expanded)
-        self._header.setText(("▾" if expanded else "▸") + "  Thinking")
+        caret = "▾" if expanded else "▸"
+        self._header.setText(translate("CADAgent", "{0}  Thinking").format(caret))
 
     def collapse(self) -> None:
         self.set_expanded(False)
@@ -507,9 +541,9 @@ class _ToolHeaderButton(QtWidgets.QAbstractButton):
 class _ToolEntry(QtWidgets.QWidget):
     """Claude Code-style tool block with collapsible IN/OUT body.
 
-    pending → expanded caret ▾
-    ok done → collapsed caret ▸ with one-line ✓ summary beside title
-    error   → expanded caret ▾ with red dot
+    pending -> expanded caret
+    ok done -> collapsed caret with one-line summary beside title
+    error   -> expanded caret with red dot
     """
 
     def __init__(self, tool_name: str, tool_input: dict):
@@ -569,7 +603,7 @@ class _ToolEntry(QtWidgets.QWidget):
         in_row.setContentsMargins(0, 0, 0, 0)
         in_row.setSpacing(8)
         in_row.setAlignment(QtCore.Qt.AlignTop)
-        in_row.addWidget(_badge("IN"), 0, QtCore.Qt.AlignTop)
+        in_row.addWidget(_badge(translate("CADAgent", "IN")), 0, QtCore.Qt.AlignTop)
         in_row.addWidget(_CodeBlock(_pretty_input(tool_input)), 1)
         bl.addLayout(in_row)
 
@@ -600,8 +634,9 @@ class _ToolEntry(QtWidgets.QWidget):
 
         preview = _preview_result(content)
         self._result_preview = preview
+        badge_text = translate("CADAgent", "ERR") if is_error else translate("CADAgent", "OUT")
         self._out_row_layout.addWidget(
-            _badge("ERR" if is_error else "OUT"), 0, QtCore.Qt.AlignTop
+            _badge(badge_text), 0, QtCore.Qt.AlignTop
         )
         block = _CodeBlock(preview)
         if is_error:
@@ -626,7 +661,7 @@ class _ToolEntry(QtWidgets.QWidget):
 
 
 class _TurnFooter(QtWidgets.QWidget):
-    """Thin divider + right-aligned `<tok> tok · $<cost>` footer."""
+    """Thin divider plus right-aligned token/cost footer."""
 
     def __init__(self, text: str):
         super().__init__()
@@ -681,7 +716,7 @@ class _ToolCallCard(QtWidgets.QWidget):
         title.setProperty("role", "tool_title")
         _selectable(title)
         header.addWidget(title)
-        pending = QtWidgets.QLabel("pending approval")
+        pending = QtWidgets.QLabel(translate("CADAgent", "pending approval"))
         pending.setProperty("role", "chip_accent")
         header.addWidget(pending)
         header.addStretch(1)
@@ -699,17 +734,17 @@ class _ToolCallCard(QtWidgets.QWidget):
         in_row.setContentsMargins(0, 0, 0, 0)
         in_row.setSpacing(8)
         in_row.setAlignment(QtCore.Qt.AlignTop)
-        in_row.addWidget(_badge("IN"), 0, QtCore.Qt.AlignTop)
+        in_row.addWidget(_badge(translate("CADAgent", "IN")), 0, QtCore.Qt.AlignTop)
         in_row.addWidget(_CodeBlock(_pretty_input(tool_input)), 1)
         col.addLayout(in_row)
 
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(6)
-        self._apply_btn = QtWidgets.QPushButton("Apply")
+        self._apply_btn = QtWidgets.QPushButton(translate("CADAgent", "Apply"))
         self._apply_btn.setProperty("role", "apply")
         self._apply_btn.setDefault(True)
-        self._reject_btn = QtWidgets.QPushButton("Reject")
+        self._reject_btn = QtWidgets.QPushButton(translate("CADAgent", "Reject"))
         self._reject_btn.setProperty("role", "reject")
         self._status = QtWidgets.QLabel("")
         self._status.setProperty("role", "muted")
@@ -721,9 +756,15 @@ class _ToolCallCard(QtWidgets.QWidget):
 
         outer.addLayout(col, 1)
 
-        self._apply_btn.clicked.connect(lambda: self._decide(True, "", "applied"))
+        self._apply_btn.clicked.connect(
+            lambda: self._decide(True, "", translate("CADAgent", "applied"))
+        )
         self._reject_btn.clicked.connect(
-            lambda: self._decide(False, "User rejected this action.", "rejected")
+            lambda: self._decide(
+                False,
+                "User rejected this action.",
+                translate("CADAgent", "rejected"),
+            )
         )
 
     def _decide(self, allowed: bool, reason: str, status_text: str):
@@ -758,7 +799,7 @@ class _Composer(QtWidgets.QFrame):
 
         self.input = QtWidgets.QPlainTextEdit()
         self.input.setObjectName("ComposerInput")
-        self.input.setPlaceholderText("Ask the CAD agent…")
+        self.input.setPlaceholderText(translate("CADAgent", "Ask the CAD agent…"))
         self.input.setFixedHeight(44)
         self.input.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.input.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
@@ -772,19 +813,21 @@ class _Composer(QtWidgets.QFrame):
         plus = QtWidgets.QPushButton("+")
         plus.setProperty("role", "pill")
         plus.setFixedSize(20, 20)
-        plus.setToolTip("Attach (coming soon)")
+        plus.setToolTip(translate("CADAgent", "Attach (coming soon)"))
         plus.setCursor(QtCore.Qt.PointingHandCursor)
 
         slash = QtWidgets.QPushButton("⁄")
         slash.setProperty("role", "pill")
         slash.setFixedSize(20, 20)
-        slash.setToolTip("Commands (coming soon)")
+        slash.setToolTip(translate("CADAgent", "Commands (coming soon)"))
         slash.setCursor(QtCore.Qt.PointingHandCursor)
 
-        self.context_chip = _chip("▤  CAD Agent", accent=False)
-        self.context_chip.setToolTip("Current context")
+        self.context_chip = _chip(translate("CADAgent", "▤  CAD Agent"), accent=False)
+        self.context_chip.setToolTip(translate("CADAgent", "Current context"))
 
-        self.permission_chip = QtWidgets.QLabel("⛨  Bypass permissions")
+        self.permission_chip = QtWidgets.QLabel(
+            translate("CADAgent", "⛨  Bypass permissions")
+        )
         self.permission_chip.setProperty("role", "perm")
         self.permission_chip.hide()
 
@@ -792,13 +835,13 @@ class _Composer(QtWidgets.QFrame):
         self.send_btn.setObjectName("SendButton")
         self.send_btn.setFixedSize(26, 26)
         self.send_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        self.send_btn.setToolTip("Send  (Ctrl+Enter)")
+        self.send_btn.setToolTip(translate("CADAgent", "Send  (Ctrl+Enter)"))
 
         self.stop_btn = QtWidgets.QPushButton("■")
         self.stop_btn.setObjectName("StopButton")
         self.stop_btn.setFixedSize(26, 26)
         self.stop_btn.setCursor(QtCore.Qt.PointingHandCursor)
-        self.stop_btn.setToolTip("Stop")
+        self.stop_btn.setToolTip(translate("CADAgent", "Stop"))
         self.stop_btn.hide()
 
         row.addWidget(plus)
@@ -836,16 +879,16 @@ class _Composer(QtWidgets.QFrame):
 
 
 def _shorten_tool_name(tool_name: str) -> str:
-    # "mcp__cad__make_box" -> "make_box"
+    """Strip the `mcp__cad__` prefix from a tool name, if present."""
     if tool_name.startswith("mcp__cad__"):
         return tool_name[len("mcp__cad__"):]
     return tool_name
 
 
 def _summarise_tool_input(tool_input: dict) -> str:
+    """Build a short human-skimmable one-line summary of tool inputs."""
     if not isinstance(tool_input, dict):
         return ""
-    # Small, human-skimmable summary for the header line.
     parts = []
     for k, v in list(tool_input.items())[:4]:
         if isinstance(v, (dict, list)):
@@ -855,6 +898,7 @@ def _summarise_tool_input(tool_input: dict) -> str:
 
 
 def _pretty_input(tool_input) -> str:
+    """Format tool input as pretty-printed JSON."""
     try:
         return json.dumps(tool_input, indent=2, default=str)
     except Exception:
@@ -862,6 +906,7 @@ def _pretty_input(tool_input) -> str:
 
 
 def _preview_result(content) -> str:
+    """Return a trimmed textual preview of a tool result payload."""
     try:
         if isinstance(content, list) and content and isinstance(content[0], dict) and "text" in content[0]:
             return content[0]["text"][:1200]
@@ -919,11 +964,16 @@ class ChatPanel(QtWidgets.QWidget):
         self._composer.sendRequested.connect(self._on_send_clicked)
         self._composer.stopRequested.connect(self._on_stop_clicked)
 
-        self._append(_SystemRow("CAD Agent ready. Ask me to model something."))
+        self._append(
+            _SystemRow(
+                translate("CADAgent", "CAD Agent ready. Ask me to model something.")
+            )
+        )
 
     # --- External API -------------------------------------------------
 
     def attach_runtime(self, runtime) -> None:
+        """Bind an agent runtime and sync permission-mode UI state."""
         self._runtime = runtime
         try:
             mode = App.ParamGet(
@@ -968,7 +1018,10 @@ class ChatPanel(QtWidgets.QWidget):
             rl.setContentsMargins(28, 2, 10, 2)
             rl.setSpacing(8)
             rl.setAlignment(QtCore.Qt.AlignTop)
-            rl.addWidget(_badge("ERR" if is_error else "OUT"), 0, QtCore.Qt.AlignTop)
+            badge_text = (
+                translate("CADAgent", "ERR") if is_error else translate("CADAgent", "OUT")
+            )
+            rl.addWidget(_badge(badge_text), 0, QtCore.Qt.AlignTop)
             rl.addWidget(_CodeBlock(_preview_result(content)), 1)
             self._append(row)
 
@@ -988,10 +1041,10 @@ class ChatPanel(QtWidgets.QWidget):
                 tokens = (in_tok or 0) + (out_tok or 0)
         parts = []
         if tokens is not None:
-            parts.append(f"{tokens:,} tok")
+            parts.append(translate("CADAgent", "{0} tok").format(f"{tokens:,}"))
         if cost is not None:
             parts.append(f"${cost:.4f}")
-        text = " · ".join(parts) if parts else "turn complete"
+        text = " · ".join(parts) if parts else translate("CADAgent", "turn complete")
         self._append(_TurnFooter(text))
 
     def mark_turn_complete(self) -> None:
@@ -1006,9 +1059,9 @@ class ChatPanel(QtWidgets.QWidget):
     def request_permission_threadsafe(
         self, tool_name: str, tool_input: dict, cf_future
     ) -> None:
-        """Create a pending card whose Apply/Reject resolves `cf_future`.
+        """Create a pending card whose Apply/Reject resolves ``cf_future``.
 
-        Called from the Qt GUI thread (via the PanelProxy signal). `cf_future`
+        Called from the Qt GUI thread (via the PanelProxy signal). ``cf_future``
         is a concurrent.futures.Future awaited by the async worker thread.
         """
         self._close_assistant()
@@ -1041,7 +1094,7 @@ class ChatPanel(QtWidgets.QWidget):
         if not text:
             return
         if self._runtime is None:
-            self.show_error("Agent runtime is not ready yet.")
+            self.show_error(translate("CADAgent", "Agent runtime is not ready yet."))
             return
         self._composer.input.clear()
         self._append(_UserRow(text))
@@ -1056,12 +1109,13 @@ class ChatPanel(QtWidgets.QWidget):
 
 
 def get_or_create_dock() -> QtWidgets.QDockWidget:
+    """Return the CAD Agent dock widget, creating it on first use."""
     mw = _mw()
     existing = mw.findChild(QtWidgets.QDockWidget, DOCK_OBJECT_NAME)
     if existing is not None:
         return existing
 
-    dock = QtWidgets.QDockWidget("CAD Agent", mw)
+    dock = QtWidgets.QDockWidget(translate("CADAgent", "CAD Agent"), mw)
     dock.setObjectName(DOCK_OBJECT_NAME)
     panel = ChatPanel(dock)
     ChatPanel._instance = panel
@@ -1072,4 +1126,5 @@ def get_or_create_dock() -> QtWidgets.QDockWidget:
 
 
 def get_panel():
+    """Return the singleton ChatPanel instance, if any."""
     return ChatPanel._instance
