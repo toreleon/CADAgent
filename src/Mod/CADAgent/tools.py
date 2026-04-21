@@ -1,10 +1,36 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
+
+# ***************************************************************************
+# *                                                                         *
+# *   Copyright (c) 2026 FreeCAD Project Association <www.freecad.org>      *
+# *                                                                         *
+# *   This file is part of the FreeCAD CAx development system.              *
+# *                                                                         *
+# *   This program is free software; you can redistribute it and/or modify  *
+# *   it under the terms of the GNU Lesser General Public License (LGPL)    *
+# *   as published by the Free Software Foundation; either version 2 of     *
+# *   the License, or (at your option) any later version.                   *
+# *   for detail see the LICENCE text file.                                 *
+# *                                                                         *
+# *   FreeCAD is distributed in the hope that it will be useful,            *
+# *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+# *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+# *   GNU Library General Public License for more details.                  *
+# *                                                                         *
+# *   You should have received a copy of the GNU Library General Public     *
+# *   License along with FreeCAD; if not, write to the Free Software        *
+# *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  *
+# *   USA                                                                   *
+# *                                                                         *
+# ***************************************************************************
 """In-process MCP tools exposing FreeCAD's Python API to the CAD Agent.
 
 Each mutating tool wraps its work in `doc.openTransaction / commitTransaction`
 so a single agent action becomes one Ctrl+Z step. Read-only tools return
 JSON-encoded summaries of the requested state.
 """
+
+from __future__ import annotations
 
 import json
 import traceback
@@ -23,8 +49,8 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 import tools_partdesign
 import tools_macros
 import tools_diagnostics
-from gui_thread import run_sync
 import errors
+from gui_thread import run_sync
 
 
 _LAST_RESULT: dict[str, Any] = {"tool": None, "summary": None}
