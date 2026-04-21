@@ -1,4 +1,28 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
+
+# ***************************************************************************
+# *                                                                         *
+# *   Copyright (c) 2026 FreeCAD Project Association <www.freecad.org>      *
+# *                                                                         *
+# *   This file is part of the FreeCAD CAx development system.              *
+# *                                                                         *
+# *   This program is free software; you can redistribute it and/or modify  *
+# *   it under the terms of the GNU Lesser General Public License (LGPL)    *
+# *   as published by the Free Software Foundation; either version 2 of     *
+# *   the License, or (at your option) any later version.                   *
+# *   for detail see the LICENCE text file.                                 *
+# *                                                                         *
+# *   FreeCAD is distributed in the hope that it will be useful,            *
+# *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+# *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+# *   GNU Library General Public License for more details.                  *
+# *                                                                         *
+# *   You should have received a copy of the GNU Library General Public     *
+# *   License along with FreeCAD; if not, write to the Free Software        *
+# *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  *
+# *   USA                                                                   *
+# *                                                                         *
+# ***************************************************************************
 """Dockable web-based chat panel using QWebEngineView + QWebChannel.
 
 The HTML/TS app lives under Resources/web/. This module loads it inside a
@@ -7,6 +31,8 @@ QDockWidget and wires a ChatBridge that the JS side consumes via QWebChannel.
 Panel interface matches the native ChatPanel so AgentRuntime can call either
 one interchangeably.
 """
+
+from __future__ import annotations
 
 import os
 
@@ -32,6 +58,8 @@ except ImportError:
 
 from Bridge import ChatBridge
 
+
+translate = App.Qt.translate
 
 DOCK_OBJECT_NAME = "CADAgentChatDock"
 
@@ -60,10 +88,14 @@ class WebChatPanel(QtWidgets.QWidget):
         if os.path.exists(_WEB_INDEX):
             self.view.load(QtCore.QUrl.fromLocalFile(_WEB_INDEX))
         else:
+            message = translate(
+                "CADAgent",
+                "CAD Agent web UI not found at:\n{0}\n"
+                "Rebuild the module (cmake --build build/debug --target CADAgent).",
+            ).format(_WEB_INDEX)
             self.view.setHtml(
                 f"<pre style='color:#e05757;padding:12px;font:12px monospace'>"
-                f"CAD Agent web UI not found at:\n{_WEB_INDEX}\n"
-                f"Rebuild the module (cmake --build build/debug --target CADAgent)."
+                f"{message}"
                 f"</pre>"
             )
         lay.addWidget(self.view)
@@ -111,7 +143,7 @@ def get_or_create_dock() -> QtWidgets.QDockWidget:
     if existing is not None:
         return existing
 
-    dock = QtWidgets.QDockWidget("CAD Agent", mw)
+    dock = QtWidgets.QDockWidget(translate("CADAgent", "CAD Agent"), mw)
     dock.setObjectName(DOCK_OBJECT_NAME)
     panel = WebChatPanel(dock)
     WebChatPanel._instance = panel
