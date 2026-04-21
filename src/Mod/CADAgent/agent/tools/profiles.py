@@ -23,7 +23,6 @@ Every builder returns a dict with `geo_ids`, `constraint_ids`, `dof`,
 from __future__ import annotations
 
 import math
-from typing import Any
 
 import FreeCAD as App
 
