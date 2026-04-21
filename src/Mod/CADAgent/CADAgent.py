@@ -1,4 +1,28 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
+
+# ***************************************************************************
+# *                                                                         *
+# *   Copyright (c) 2026 FreeCAD Project Association <www.freecad.org>      *
+# *                                                                         *
+# *   This file is part of the FreeCAD CAx development system.              *
+# *                                                                         *
+# *   This program is free software; you can redistribute it and/or modify  *
+# *   it under the terms of the GNU Lesser General Public License (LGPL)    *
+# *   as published by the Free Software Foundation; either version 2 of     *
+# *   the License, or (at your option) any later version.                   *
+# *   for detail see the LICENCE text file.                                 *
+# *                                                                         *
+# *   FreeCAD is distributed in the hope that it will be useful,            *
+# *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+# *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+# *   GNU Library General Public License for more details.                  *
+# *                                                                         *
+# *   You should have received a copy of the GNU Library General Public     *
+# *   License along with FreeCAD; if not, write to the Free Software        *
+# *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  *
+# *   USA                                                                   *
+# *                                                                         *
+# ***************************************************************************
 """Module entry points for the CAD Agent workbench.
 
 Responsibilities:
@@ -6,6 +30,8 @@ Responsibilities:
   * Create the chat dock widget on demand.
   * Register commands and preferences page.
 """
+
+from __future__ import annotations
 
 import os
 import sys
@@ -21,6 +47,9 @@ except ImportError:
         from PySide6 import QtCore, QtGui, QtWidgets
     except ImportError:
         from PySide2 import QtCore, QtGui, QtWidgets
+
+
+translate = App.Qt.translate
 
 
 _RUNTIME = None
@@ -60,12 +89,14 @@ def _install_asyncio_loop() -> None:
 
 
 def add_preferences_page() -> None:
+    """Register the CAD Agent preferences page if the .ui file is available."""
     ui_path = os.path.join(os.path.dirname(__file__), "dlgPreferencesCADAgent.ui")
     if os.path.exists(ui_path):
         Gui.addPreferencePage(ui_path, "CAD Agent")
 
 
 def _make_open_panel_command():
+    """Build and return the CADAgent_OpenPanel command class."""
     try:
         import CADAgent_rc  # noqa: F401 - registers Qt resources
     except ImportError:
@@ -74,8 +105,8 @@ def _make_open_panel_command():
     class CADAgent_OpenPanel:
         def GetResources(self):
             return {
-                "MenuText": "Open CAD Agent",
-                "ToolTip": "Open the CAD Agent chat panel",
+                "MenuText": translate("CADAgent", "Open CAD Agent"),
+                "ToolTip": translate("CADAgent", "Open the CAD Agent chat panel"),
                 "Pixmap": ":/CADAgent/icons/CADAgent.svg",
             }
 
@@ -89,6 +120,7 @@ def _make_open_panel_command():
 
 
 def register_commands() -> None:
+    """Register the CAD Agent Gui commands (idempotent)."""
     try:
         Gui.addCommand("CADAgent_OpenPanel", _make_open_panel_command()())
     except Exception:

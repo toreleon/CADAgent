@@ -1,4 +1,29 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
+
+# ***************************************************************************
+# *                                                                         *
+# *   Copyright (c) 2026 FreeCAD Project Association <www.freecad.org>      *
+# *                                                                         *
+# *   This file is part of the FreeCAD CAx development system.              *
+# *                                                                         *
+# *   This program is free software; you can redistribute it and/or modify  *
+# *   it under the terms of the GNU Lesser General Public License (LGPL)    *
+# *   as published by the Free Software Foundation; either version 2 of     *
+# *   the License, or (at your option) any later version.                   *
+# *   for detail see the LICENCE text file.                                 *
+# *                                                                         *
+# *   FreeCAD is distributed in the hope that it will be useful,            *
+# *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+# *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+# *   GNU Library General Public License for more details.                  *
+# *                                                                         *
+# *   You should have received a copy of the GNU Library General Public     *
+# *   License along with FreeCAD; if not, write to the Free Software        *
+# *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  *
+# *   USA                                                                   *
+# *                                                                         *
+# ***************************************************************************
+
 """Tier A macros — intent-level CAD operations that compose the primitive
 tools into one-shot, atomic, guaranteed-valid transactions.
 
@@ -82,6 +107,72 @@ def _new_pad(body, sketch, length: float, name: str):
     if "SideType" in pad.PropertiesList:
         pad.SideType = "One side"
     return pad
+
+
+def _present_result(doc, body=None, feature=None, sketch=None):
+    """Leave the user looking at the created solid instead of an in-edit sketch.
+
+    In practice the common failure report was "it made two triangles" when the
+    model was correct but the camera was still in TOP and the sketch face stayed
+    foregrounded. This helper resets edit state, hides the consumed sketch, then
+    switches to an isometric fitted view.
+    """
+    if not _HAS_GUI:
+        return
+    try:
+        gui_doc = Gui.getDocument(doc.Name) if hasattr(Gui, "getDocument") else Gui.ActiveDocument
+    except Exception:
+        gui_doc = Gui.ActiveDocument if _HAS_GUI else None
+    if gui_doc is None:
+        return
+
+    try:
+        if hasattr(gui_doc, "getInEdit") and gui_doc.getInEdit() is not None:
+            gui_doc.resetEdit()
+    except Exception:
+        pass
+
+    if body is not None:
+        try:
+            active_view = getattr(gui_doc, "ActiveView", None)
+            if active_view is not None and hasattr(active_view, "setActiveObject"):
+                active_view.setActiveObject("pdbody", body)
+        except Exception:
+            pass
+
+    for obj, visible in ((sketch, False), (feature, True), (body, True)):
+        if obj is None:
+            continue
+        try:
+            view_obj = getattr(obj, "ViewObject", None)
+            if view_obj is not None and hasattr(view_obj, "Visibility"):
+                view_obj.Visibility = visible
+        except Exception:
+            pass
+
+    try:
+        Gui.Selection.clearSelection()
+        if feature is not None:
+            Gui.Selection.addSelection(doc.Name, feature.Name)
+        elif body is not None:
+            Gui.Selection.addSelection(doc.Name, body.Name)
+    except Exception:
+        pass
+
+    try:
+        view = getattr(gui_doc, "ActiveView", None)
+        if view is not None:
+            if hasattr(view, "viewIsometric"):
+                view.viewIsometric()
+            elif hasattr(view, "viewAxometric"):
+                view.viewAxometric()
+            if hasattr(view, "fitAll"):
+                view.fitAll()
+        else:
+            Gui.runCommand("Std_ViewIsometric")
+            Gui.SendMsgToActiveView("ViewFit")
+    except Exception:
+        pass
 
 
 def _set_parametric(doc, sketch, pad, named_constraints: dict[str, int],
@@ -203,6 +294,7 @@ async def make_parametric_box(args):
                         **summary,
                     )}
                 doc.commitTransaction()
+                _present_result(doc, body=body, feature=pad, sketch=sk)
                 project_memory.append_decision(
                     doc,
                     f"make_parametric_box L={length} W={width} H={height} "
@@ -291,6 +383,7 @@ async def make_parametric_cylinder(args):
                         **summary,
                     )}
                 doc.commitTransaction()
+                _present_result(doc, body=body, feature=pad, sketch=sk)
                 project_memory.append_decision(
                     doc,
                     f"make_parametric_cylinder R={radius} H={height} "
@@ -405,6 +498,8 @@ async def make_parametric_plate(args):
                         "invalid_solid", feature=pad.Name, **summary,
                     )}
                 doc.commitTransaction()
+                final_feature = doc.getObject(created[-1]) if created else pad
+                _present_result(doc, body=body, feature=final_feature, sketch=sk)
                 project_memory.append_decision(
                     doc,
                     f"make_parametric_plate L={length} W={width} T={thickness}"
