@@ -1,24 +1,52 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Part Design + Sketcher MCP tools for the CAD Agent.
+
+# ***************************************************************************
+# *                                                                         *
+# *   Copyright (c) 2026 FreeCAD Project Association <www.freecad.org>      *
+# *                                                                         *
+# *   This file is part of the FreeCAD CAx development system.              *
+# *                                                                         *
+# *   This program is free software; you can redistribute it and/or modify  *
+# *   it under the terms of the GNU Lesser General Public License (LGPL)    *
+# *   as published by the Free Software Foundation; either version 2 of     *
+# *   the License, or (at your option) any later version.                   *
+# *   for detail see the LICENCE text file.                                 *
+# *                                                                         *
+# *   FreeCAD is distributed in the hope that it will be useful,            *
+# *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+# *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+# *   GNU Library General Public License for more details.                  *
+# *                                                                         *
+# *   You should have received a copy of the GNU Library General Public     *
+# *   License along with FreeCAD; if not, write to the Free Software        *
+# *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  *
+# *   USA                                                                   *
+# *                                                                         *
+# ***************************************************************************
+
+"""Part Design and Sketcher MCP tools for the CAD Agent.
 
 Adds parametric Body / Sketch / Pad / Pocket / Fillet / Chamfer / Hole tools
 plus project-memory helpers. Every mutating call hops onto the Qt GUI thread
-via `gui_thread.run_sync` and wraps work in one undo transaction.
+via ``gui_thread.run_sync`` and wraps work in one undo transaction.
 
-Sketch constraint `refs` conventions
-------------------------------------
-Constraints take a flat list of ints matching the Sketcher.Constraint
+Sketch constraint ``refs`` conventions
+--------------------------------------
+Constraints take a flat list of ints matching the ``Sketcher.Constraint``
 positional arguments. Point positions: 0=edge, 1=start, 2=end, 3=center.
 
-Examples
-  Horizontal(Geo=2)            refs=[2]
-  Vertical(Geo=3)              refs=[3]
-  Coincident(g1=0,p1=2,g2=1,p2=1)  refs=[0,2,1,1]
-  Distance(Geo=2, L=50)        refs=[2], value=50
-  DistanceX(g1=0,p1=1,g2=0,p2=2, L=50) refs=[0,1,0,2], value=50
-  Radius(Geo=0, R=5)           refs=[0], value=5
-  Equal(g1, g2)                refs=[g1,g2]
+Examples::
+
+    Horizontal(Geo=2)                     refs=[2]
+    Vertical(Geo=3)                       refs=[3]
+    Coincident(g1=0,p1=2,g2=1,p2=1)       refs=[0,2,1,1]
+    Distance(Geo=2, L=50)                 refs=[2], value=50
+    DistanceX(g1=0,p1=1,g2=0,p2=2, L=50)  refs=[0,1,0,2], value=50
+    Radius(Geo=0, R=5)                    refs=[0], value=5
+    Equal(g1, g2)                         refs=[g1,g2]
 """
+
+from __future__ import annotations
 
 import json
 import traceback
@@ -34,9 +62,9 @@ except ImportError:
 
 from claude_agent_sdk import tool
 
-import project_memory
-import profiles
 import errors
+import profiles
+import project_memory
 from gui_thread import run_sync
 
 
