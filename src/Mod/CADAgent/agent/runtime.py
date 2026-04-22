@@ -14,7 +14,26 @@ import concurrent.futures
 import os
 import sys
 import threading
+import time
 import traceback
+
+
+# Set CADAGENT_DEBUG=1 in the environment (or in Preferences → CADAgent) to
+# stream per-message timing to stderr. Use it to confirm whether delta events
+# arrive progressively from the proxy or in one burst at the end.
+_DEBUG = bool(os.environ.get("CADAGENT_DEBUG"))
+
+
+def _dbg(tag: str) -> None:
+    if _DEBUG:
+        try:
+            print(
+                f"[cadagent {time.monotonic():.3f}] {tag}",
+                file=sys.__stderr__,
+                flush=True,
+            )
+        except Exception:
+            pass
 
 import FreeCAD as App
 
@@ -48,6 +67,7 @@ try:
 finally:
     sys.stderr = _saved_stderr
 
+from . import sessions as cad_sessions
 from . import tools as cad_tools
 from .context import wrap_user_message
 from .permissions import make_can_use_tool
@@ -106,6 +126,7 @@ class _PanelProxy(QtCore.QObject):
     turnComplete = QtCore.Signal()
     error = QtCore.Signal(str)
     permissionRequest = QtCore.Signal(str, object, object)  # name, input, cf_future
+    sessionChanged = QtCore.Signal(str)  # new session_id (captured from SDK)
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -118,6 +139,8 @@ class _PanelProxy(QtCore.QObject):
         self.turnComplete.connect(panel.mark_turn_complete)
         self.error.connect(panel.show_error)
         self.permissionRequest.connect(self._on_permission_request)
+        if hasattr(panel, "on_session_changed"):
+            self.sessionChanged.connect(panel.on_session_changed)
 
     def _on_permission_request(self, tool_name, tool_input, cf_future):
         """Runs on the GUI thread — asks the panel, resolves the cf_future
@@ -140,6 +163,13 @@ class AgentRuntime:
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._current_future: concurrent.futures.Future | None = None
+        # Session state: None = start a fresh session on next turn.
+        # After the first ResultMessage we capture the SDK's session_id here
+        # so we can record it in the per-document index.
+        self._resume_session_id: str | None = None
+        self._active_session_id: str | None = None
+        self._pending_first_prompt: str | None = None
+        self._active_doc = None
 
     # --- worker thread --------------------------------------------------
 
@@ -174,15 +204,24 @@ class AgentRuntime:
         base_url = _resolve_base_url()
         if base_url:
             os.environ["ANTHROPIC_BASE_URL"] = base_url
+        model = _resolve_model()
+        # Proxies (LiteLLM, copilot-api, …) often only expose the single model
+        # the user configured and reject Anthropic's default Haiku used for
+        # background tasks (title generation, compaction). Pin the small/fast
+        # model to the configured model so every request routes to something
+        # the proxy recognises.
+        os.environ["ANTHROPIC_MODEL"] = model
+        os.environ["ANTHROPIC_SMALL_FAST_MODEL"] = model
         server = cad_tools.build_mcp_server()
         options = ClaudeAgentOptions(
-            model=_resolve_model(),
+            model=model,
             system_prompt=CAD_SYSTEM_PROMPT,
             mcp_servers={"cad": server},
             allowed_tools=cad_tools.allowed_tool_names(),
             can_use_tool=make_can_use_tool(self._proxy),
             permission_mode=_resolve_permission_mode(),
             include_partial_messages=True,
+            resume=self._resume_session_id,
         )
         self.client = ClaudeSDKClient(options=options)
         await self.client.__aenter__()
@@ -191,8 +230,10 @@ class AgentRuntime:
         try:
             await self._ensure_client()
             assert self.client is not None
+            self._pending_first_prompt = user_text
             wrapped = wrap_user_message(user_text)
             await self.client.query(wrapped)
+            _dbg("ask: sent query, awaiting stream")
             async for msg in self.client.receive_response():
                 self._route_message(msg)
         except Exception as exc:
@@ -205,18 +246,28 @@ class AgentRuntime:
     def _route_message(self, msg) -> None:
         if isinstance(msg, StreamEvent):
             ev = msg.event or {}
-            if ev.get("type") == "content_block_delta":
+            ev_type = ev.get("type")
+            if ev_type == "content_block_delta":
                 delta = ev.get("delta") or {}
-                if delta.get("type") == "text_delta":
+                dtype = delta.get("type")
+                if dtype == "text_delta":
                     text = delta.get("text") or ""
                     if text:
+                        _dbg(f"text_delta len={len(text)}")
                         self._proxy.assistantText.emit(text)
-                elif delta.get("type") == "thinking_delta":
+                elif dtype == "thinking_delta":
                     text = delta.get("thinking") or ""
                     if text:
+                        _dbg(f"thinking_delta len={len(text)}")
                         self._proxy.thinking.emit(text)
+            else:
+                _dbg(f"StreamEvent type={ev_type}")
             return
+        _dbg(f"msg={type(msg).__name__}")
         if isinstance(msg, AssistantMessage):
+            sid = getattr(msg, "session_id", None)
+            if sid:
+                self._capture_session_id(sid)
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     # Text already streamed via StreamEvent deltas; skip to avoid
@@ -239,7 +290,29 @@ class AgentRuntime:
                         getattr(block, "is_error", False),
                     )
         elif isinstance(msg, ResultMessage):
+            sid = getattr(msg, "session_id", None)
+            if sid:
+                self._capture_session_id(sid)
+            self._record_turn_in_index()
             self._proxy.resultMsg.emit(msg)
+
+    def _capture_session_id(self, session_id: str) -> None:
+        if session_id and session_id != self._active_session_id:
+            self._active_session_id = session_id
+            self._proxy.sessionChanged.emit(session_id)
+
+    def _record_turn_in_index(self) -> None:
+        if not self._active_session_id or self._active_doc is None:
+            return
+        try:
+            cad_sessions.record_turn(
+                self._active_doc,
+                self._active_session_id,
+                self._pending_first_prompt,
+            )
+        except Exception:
+            pass
+        self._pending_first_prompt = None
 
     # --- entry points ---------------------------------------------------
 
@@ -251,10 +324,55 @@ class AgentRuntime:
         ):
             self.panel.show_error("A previous turn is still running.")
             return
+        if self._active_doc is None:
+            self._active_doc = App.ActiveDocument
         loop = self._ensure_loop()
         self._current_future = asyncio.run_coroutine_threadsafe(
             self.ask(user_text), loop
         )
+
+    # --- session lifecycle ---------------------------------------------
+
+    def bind_document(self, doc) -> None:
+        """Associate turns with ``doc`` for per-document session indexing."""
+        self._active_doc = doc
+
+    def active_session_id(self) -> str | None:
+        return self._active_session_id
+
+    def _turn_in_flight(self) -> bool:
+        return (
+            self._current_future is not None
+            and not self._current_future.done()
+        )
+
+    def start_new_session(self) -> bool:
+        """Discard the current SDK client so the next turn starts fresh."""
+        if self._turn_in_flight():
+            return False
+        self._resume_session_id = None
+        self._active_session_id = None
+        self._pending_first_prompt = None
+        self._teardown_client()
+        return True
+
+    def resume_session(self, session_id: str) -> bool:
+        """Discard the current client and resume ``session_id`` on next turn."""
+        if self._turn_in_flight():
+            return False
+        self._resume_session_id = session_id
+        self._active_session_id = session_id
+        self._pending_first_prompt = None
+        self._teardown_client()
+        return True
+
+    def _teardown_client(self) -> None:
+        if self.client is None:
+            return
+        if self._loop is None:
+            self.client = None
+            return
+        asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
 
     async def _interrupt(self) -> None:
         if self.client is not None:

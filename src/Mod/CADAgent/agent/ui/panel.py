@@ -18,9 +18,13 @@ except ImportError:
     except ImportError:
         from PySide2 import QtCore, QtWidgets
 
+from .. import sessions as cad_sessions
 from .composer import _Composer
-from .styles import PANEL_QSS
+from .history_popup import HistoryPopup
+from .styles import build_panel_qss
 from .widgets import (
+    GUTTER,
+    IO_COL,
     _AssistantRow,
     _CodeBlock,
     _ErrorRow,
@@ -30,7 +34,6 @@ from .widgets import (
     _ToolEntry,
     _TurnFooter,
     _UserRow,
-    badge,
     preview_result,
 )
 
@@ -39,6 +42,24 @@ translate = App.Qt.translate
 
 
 DOCK_OBJECT_NAME = "CADAgentChatDock"
+
+
+def _extract_text(message) -> str:
+    """Pull plain text out of a raw session-transcript message dict."""
+    if message is None:
+        return ""
+    content = message.get("content") if isinstance(message, dict) else None
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text" and block.get("text"):
+            parts.append(block["text"])
+    return "\n".join(parts).strip()
 
 
 def _mw():
@@ -52,17 +73,22 @@ class ChatPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("CADAgentRoot")
-        self.setStyleSheet(PANEL_QSS)
+        self.setStyleSheet(build_panel_qss())
         self._runtime = None
         self._assistant_row = None
         self._last_thinking_row: _ThinkingRow | None = None
         self._tool_entries: dict[str, _ToolEntry] = {}
+        self._bound_doc = None
+        self._current_session_id: str | None = None
         self._build_ui()
+        self._sync_doc_binding()
 
     def _build_ui(self):
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+
+        root.addWidget(self._build_topbar())
 
         self._stream = QtWidgets.QScrollArea()
         self._stream.setObjectName("CADAgentStream")
@@ -72,9 +98,9 @@ class ChatPanel(QtWidgets.QWidget):
         body.setObjectName("CADAgentStreamBody")
         self._stream_body = body
         self._stream_layout = QtWidgets.QVBoxLayout(body)
-        self._stream_layout.setAlignment(QtCore.Qt.AlignTop)
         self._stream_layout.setContentsMargins(4, 6, 4, 6)
         self._stream_layout.setSpacing(2)
+        self._stream_layout.addStretch(1)
         self._stream.setWidget(body)
         root.addWidget(self._stream, 1)
 
@@ -89,6 +115,49 @@ class ChatPanel(QtWidgets.QWidget):
         self._composer.sendRequested.connect(self._on_send_clicked)
         self._composer.stopRequested.connect(self._on_stop_clicked)
 
+        self._greet()
+
+    def _build_topbar(self) -> QtWidgets.QWidget:
+        """Minimal borderless top row with new-chat + history icon buttons.
+
+        The dock title already names the panel, so no header label/tabs — just
+        two unobtrusive icons, right-aligned, floating over the canvas.
+        """
+        bar = QtWidgets.QWidget()
+        bar.setAttribute(QtCore.Qt.WA_StyledBackground, False)
+        lay = QtWidgets.QHBoxLayout(bar)
+        lay.setContentsMargins(6, 4, 6, 0)
+        lay.setSpacing(2)
+        lay.addStretch(1)
+
+        self._new_btn = QtWidgets.QToolButton()
+        self._new_btn.setText("+")
+        self._new_btn.setProperty("role", "icon")
+        self._new_btn.setToolTip(translate("CADAgent", "New chat"))
+        self._new_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._new_btn.setFixedSize(22, 22)
+        self._new_btn.clicked.connect(self._on_new_clicked)
+        lay.addWidget(self._new_btn)
+
+        self._history_btn = QtWidgets.QToolButton()
+        self._history_btn.setText("\u25F7")
+        self._history_btn.setProperty("role", "icon")
+        self._history_btn.setToolTip(
+            translate("CADAgent", "Chat history for this document")
+        )
+        self._history_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._history_btn.setFixedSize(22, 22)
+        self._history_btn.clicked.connect(self._on_history_clicked)
+        lay.addWidget(self._history_btn)
+
+        # Kept so session-title updates from existing code still have a sink.
+        self._title_lbl = QtWidgets.QLabel("")
+        self._title_lbl.setVisible(False)
+
+        self._history_popup: HistoryPopup | None = None
+        return bar
+
+    def _greet(self) -> None:
         self._append(
             _SystemRow(
                 translate("CADAgent", "CAD Agent ready. Ask me to model something.")
@@ -107,6 +176,21 @@ class ChatPanel(QtWidgets.QWidget):
             self._composer.set_bypass(mode == "bypassPermissions")
         except Exception:
             pass
+        self._sync_doc_binding()
+
+    def on_session_changed(self, session_id: str) -> None:
+        """Called from the runtime when the SDK reports a session id."""
+        self._current_session_id = session_id
+        doc = self._bound_doc or App.ActiveDocument
+        entry = cad_sessions.find(doc, session_id) if doc else None
+        if entry and entry.get("title"):
+            self._title_lbl.setText(entry["title"])
+        else:
+            self._title_lbl.setText(
+                translate("CADAgent", "New chat")
+                if not self._current_session_id
+                else session_id[:8]
+            )
 
     def append_assistant_text(self, text: str) -> None:
         if self._assistant_row is None:
@@ -140,13 +224,16 @@ class ChatPanel(QtWidgets.QWidget):
             # Fallback: render a standalone OUT block so nothing is lost.
             row = QtWidgets.QWidget()
             rl = QtWidgets.QHBoxLayout(row)
-            rl.setContentsMargins(28, 2, 10, 2)
+            rl.setContentsMargins(10 + GUTTER, 2, 12, 2)
             rl.setSpacing(8)
             rl.setAlignment(QtCore.Qt.AlignTop)
-            badge_text = (
+            label_text = (
                 translate("CADAgent", "ERR") if is_error else translate("CADAgent", "OUT")
             )
-            rl.addWidget(badge(badge_text), 0, QtCore.Qt.AlignTop)
+            io_lbl = QtWidgets.QLabel(label_text)
+            io_lbl.setProperty("role", "io_label")
+            io_lbl.setFixedWidth(IO_COL)
+            rl.addWidget(io_lbl, 0, QtCore.Qt.AlignTop)
             rl.addWidget(_CodeBlock(preview_result(content)), 1)
             self._append(row)
 
@@ -196,7 +283,11 @@ class ChatPanel(QtWidgets.QWidget):
     # --- Internals ----------------------------------------------------
 
     def _append(self, widget: QtWidgets.QWidget) -> None:
-        self._stream_layout.addWidget(widget)
+        widget.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum
+        )
+        # Insert above the trailing stretch so rows stack top-down.
+        self._stream_layout.insertWidget(self._stream_layout.count() - 1, widget)
         QtCore.QTimer.singleShot(
             0,
             lambda: self._stream.verticalScrollBar().setValue(
@@ -232,6 +323,150 @@ class ChatPanel(QtWidgets.QWidget):
         self._runtime.interrupt()
         self._composer.set_busy(False)
 
+    # --- session management UI ---------------------------------------
+
+    def _sync_doc_binding(self) -> None:
+        """Bind the panel + runtime to the currently active FreeCAD document."""
+        doc = App.ActiveDocument
+        if doc is self._bound_doc:
+            return
+        self._bound_doc = doc
+        if self._runtime is not None and doc is not None:
+            self._runtime.bind_document(doc)
+        self._reset_stream(initial=True)
+
+    def _reset_stream(self, initial: bool = False) -> None:
+        self._close_assistant()
+        self._last_thinking_row = None
+        self._tool_entries.clear()
+        while self._stream_layout.count():
+            item = self._stream_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._stream_layout.addStretch(1)
+        self._greet()
+        if initial:
+            self._title_lbl.setText(translate("CADAgent", "New chat"))
+
+    def _on_new_clicked(self) -> None:
+        if self._runtime is not None and not self._runtime.start_new_session():
+            self.show_error(
+                translate("CADAgent", "Finish or stop the current turn first.")
+            )
+            return
+        self._current_session_id = None
+        self._title_lbl.setText(translate("CADAgent", "New chat"))
+        self._reset_stream()
+
+    def _on_history_clicked(self) -> None:
+        doc = self._bound_doc or App.ActiveDocument
+        entries = cad_sessions.list_sessions(doc) if doc else []
+        if self._history_popup is None:
+            self._history_popup = HistoryPopup(self)
+            self._history_popup.sessionActivated.connect(self._on_resume_clicked)
+            self._history_popup.sessionDeleted.connect(self._on_delete_session)
+        self._history_popup.set_entries(entries, self._current_session_id)
+        self._history_popup.popup_below(self._history_btn)
+
+    def _on_delete_session(self, session_id: str) -> None:
+        doc = self._bound_doc or App.ActiveDocument
+        if doc is None or not session_id:
+            return
+        cad_sessions.delete(doc, session_id)
+        if session_id == self._current_session_id:
+            if self._runtime is not None and self._runtime.start_new_session():
+                self._current_session_id = None
+                self._title_lbl.setText(translate("CADAgent", "New chat"))
+                self._reset_stream()
+
+    def _on_resume_clicked(self, session_id: str) -> None:
+        if not session_id or self._runtime is None:
+            return
+        if not self._runtime.resume_session(session_id):
+            self.show_error(
+                translate("CADAgent", "Finish or stop the current turn first.")
+            )
+            return
+        self._current_session_id = session_id
+        doc = self._bound_doc or App.ActiveDocument
+        entry = cad_sessions.find(doc, session_id) if doc else None
+        title = (entry or {}).get("title") or session_id[:8]
+        self._reset_stream()
+        self._title_lbl.setText(title)
+        self._replay_transcript(session_id)
+
+    def _replay_transcript(self, session_id: str) -> None:
+        """Render past user/assistant text from the SDK transcript."""
+        try:
+            from claude_agent_sdk import get_session_messages
+        except ImportError:
+            return
+        try:
+            msgs = get_session_messages(session_id)
+        except Exception as exc:
+            self._append(
+                _SystemRow(
+                    translate("CADAgent", "Could not load transcript: {0}").format(exc)
+                )
+            )
+            return
+        rendered = 0
+        for sm in msgs:
+            text = _extract_text(getattr(sm, "message", None))
+            if not text:
+                continue
+            if sm.type == "user":
+                self._append(_UserRow(text))
+            else:
+                row = _AssistantRow()
+                row.append(text)
+                row.mark_done()
+                self._append(row)
+            rendered += 1
+        if rendered == 0:
+            self._append(
+                _SystemRow(translate("CADAgent", "(Empty transcript)"))
+            )
+        else:
+            self._append(
+                _SystemRow(
+                    translate("CADAgent", "\u2014 resumed session \u2014")
+                )
+            )
+
+
+class _DocObserver:
+    """FreeCAD document observer that re-binds the panel on doc switches."""
+
+    def slotActivateDocument(self, _doc):
+        panel = get_panel()
+        if panel is not None:
+            try:
+                panel._sync_doc_binding()
+            except Exception:
+                pass
+
+    # Keep hook names matching FreeCAD's observer protocol; unused slots
+    # are fine to omit — App.DocumentObserver dispatches by attribute.
+    slotFinishOpenDocument = slotActivateDocument
+    slotCreatedDocument = slotActivateDocument
+
+
+_doc_observer_instance = None
+
+
+def _install_doc_observer() -> None:
+    global _doc_observer_instance
+    if _doc_observer_instance is not None:
+        return
+    try:
+        obs = _DocObserver()
+        App.addDocumentObserver(obs)
+        _doc_observer_instance = obs
+    except Exception:
+        pass
+
 
 def get_or_create_dock() -> QtWidgets.QDockWidget:
     """Return the CAD Agent dock widget, creating it on first use."""
@@ -247,6 +482,7 @@ def get_or_create_dock() -> QtWidgets.QDockWidget:
     dock.setWidget(panel)
     mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
     dock.resize(440, dock.height())
+    _install_doc_observer()
     return dock
 
 

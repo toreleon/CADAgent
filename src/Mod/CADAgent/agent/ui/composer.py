@@ -13,9 +13,6 @@ except ImportError:
     except ImportError:
         from PySide2 import QtCore, QtWidgets
 
-from .widgets import chip
-
-
 translate = App.Qt.translate
 
 
@@ -31,13 +28,15 @@ class _Composer(QtWidgets.QFrame):
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
         v = QtWidgets.QVBoxLayout(self)
-        v.setContentsMargins(10, 8, 8, 8)
+        v.setContentsMargins(12, 10, 8, 8)
         v.setSpacing(6)
 
         self.input = QtWidgets.QPlainTextEdit()
         self.input.setObjectName("ComposerInput")
-        self.input.setPlaceholderText(translate("CADAgent", "Ask the CAD agent…"))
-        self.input.setFixedHeight(44)
+        self.input.setPlaceholderText(
+            translate("CADAgent", "Ask the CAD agent…")
+        )
+        self.input.setFixedHeight(40)
         self.input.setFrameShape(QtWidgets.QFrame.NoFrame)
         self.input.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.input.installEventFilter(self)
@@ -45,46 +44,41 @@ class _Composer(QtWidgets.QFrame):
 
         row = QtWidgets.QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
+        row.setSpacing(6)
 
         plus = QtWidgets.QPushButton("+")
         plus.setProperty("role", "pill")
-        plus.setFixedSize(20, 20)
+        plus.setFixedSize(22, 22)
         plus.setToolTip(translate("CADAgent", "Attach (coming soon)"))
         plus.setCursor(QtCore.Qt.PointingHandCursor)
 
-        slash = QtWidgets.QPushButton("⁄")
+        slash = QtWidgets.QPushButton("\u2215")
         slash.setProperty("role", "pill")
-        slash.setFixedSize(20, 20)
+        slash.setFixedSize(22, 22)
         slash.setToolTip(translate("CADAgent", "Commands (coming soon)"))
         slash.setCursor(QtCore.Qt.PointingHandCursor)
 
-        self.context_chip = chip(translate("CADAgent", "▤  CAD Agent"), accent=False)
-        self.context_chip.setToolTip(translate("CADAgent", "Current context"))
-
         self.permission_chip = QtWidgets.QLabel(
-            translate("CADAgent", "⛨  Bypass permissions")
+            translate("CADAgent", "\u26E8  Bypass permissions")
         )
         self.permission_chip.setProperty("role", "perm")
         self.permission_chip.hide()
 
-        self.send_btn = QtWidgets.QPushButton("↑")
+        self.send_btn = QtWidgets.QPushButton("\u2191")
         self.send_btn.setObjectName("SendButton")
-        self.send_btn.setFixedSize(26, 26)
+        self.send_btn.setFixedSize(24, 24)
         self.send_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.send_btn.setToolTip(translate("CADAgent", "Send  (Ctrl+Enter)"))
 
-        self.stop_btn = QtWidgets.QPushButton("■")
+        self.stop_btn = QtWidgets.QPushButton("\u25A0")
         self.stop_btn.setObjectName("StopButton")
-        self.stop_btn.setFixedSize(26, 26)
+        self.stop_btn.setFixedSize(24, 24)
         self.stop_btn.setCursor(QtCore.Qt.PointingHandCursor)
         self.stop_btn.setToolTip(translate("CADAgent", "Stop"))
         self.stop_btn.hide()
 
         row.addWidget(plus)
         row.addWidget(slash)
-        row.addSpacing(4)
-        row.addWidget(self.context_chip)
         row.addStretch(1)
         row.addWidget(self.permission_chip)
         row.addSpacing(4)

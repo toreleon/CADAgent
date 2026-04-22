@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Message-row and small-widget building blocks for the ChatPanel.
+"""Message-row building blocks for the ChatPanel.
 
-Contains row types (user, assistant, thinking, system, error, tool entry,
-tool-call card, turn footer) and the label/badge/chip helpers they share.
-Kept separate from panel.py so the panel file focuses on stream orchestration.
+Claude Code-style layout: a left gutter with a small status bullet, and a
+content column holding the row title, IN/OUT labels, and code blocks.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ from .styles import (
     ACCENT,
     ACCENT_DIM,
     BG_CODE,
+    BG_USER,
     BORDER_SOFT,
     ERR,
     FG,
@@ -41,51 +41,56 @@ translate = App.Qt.translate
 
 _SELECTABLE = QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
 
+# Left gutter width: bullet + breathing room. Content column starts here.
+GUTTER = 22
+# IO label column width ("IN" / "OUT").
+IO_COL = 30
+
 
 def selectable(lbl: QtWidgets.QLabel) -> QtWidgets.QLabel:
-    """Make a label's text selectable with a text cursor."""
     lbl.setTextInteractionFlags(_SELECTABLE)
     lbl.setCursor(QtCore.Qt.IBeamCursor)
     return lbl
 
 
 def badge(text: str) -> QtWidgets.QLabel:
-    """Return a small monospace badge label."""
     lbl = QtWidgets.QLabel(text)
     lbl.setProperty("role", "badge")
-    lbl.setAlignment(QtCore.Qt.AlignCenter)
-    lbl.setMinimumWidth(36)
+    lbl.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
+    lbl.setMinimumWidth(IO_COL)
     return lbl
 
 
 def chip(text: str, accent: bool = False) -> QtWidgets.QLabel:
-    """Return a rounded chip-style label."""
     lbl = QtWidgets.QLabel(text)
     lbl.setProperty("role", "chip_accent" if accent else "chip")
     return lbl
 
 
 def shorten_tool_name(tool_name: str) -> str:
-    """Strip the `mcp__cad__` prefix from a tool name, if present."""
     if tool_name.startswith("mcp__cad__"):
         return tool_name[len("mcp__cad__"):]
     return tool_name
 
 
 def summarise_tool_input(tool_input: dict) -> str:
-    """Build a short human-skimmable one-line summary of tool inputs."""
     if not isinstance(tool_input, dict):
         return ""
+    # Prefer a natural one-liner: first short string value wins.
+    for k in ("description", "command", "file_path", "path", "query", "pattern"):
+        v = tool_input.get(k)
+        if isinstance(v, str) and v.strip():
+            s = v.strip().splitlines()[0]
+            return s[:120]
     parts = []
-    for k, v in list(tool_input.items())[:4]:
+    for k, v in list(tool_input.items())[:3]:
         if isinstance(v, (dict, list)):
             continue
         parts.append(f"{k}={v}")
-    return "  ".join(parts)
+    return "  ".join(parts)[:120]
 
 
 def pretty_input(tool_input) -> str:
-    """Format tool input as pretty-printed JSON."""
     try:
         return json.dumps(tool_input, indent=2, default=str)
     except Exception:
@@ -93,7 +98,6 @@ def pretty_input(tool_input) -> str:
 
 
 def preview_result(content) -> str:
-    """Return a trimmed textual preview of a tool result payload."""
     try:
         if isinstance(content, list) and content and isinstance(content[0], dict) and "text" in content[0]:
             return content[0]["text"][:1200]
@@ -105,11 +109,19 @@ def preview_result(content) -> str:
         return str(content)[:1200]
 
 
+def _palette_mid() -> str:
+    """Resolve the current app palette's Mid color as a hex string."""
+    app = QtWidgets.QApplication.instance()
+    if app is not None:
+        return app.palette().color(QtGui.QPalette.Mid).name()
+    return "#888888"
+
+
 class StatusDot(QtWidgets.QLabel):
-    """Tiny colored circle indicator."""
+    """Tiny circle used in the left gutter: filled when done, ring when idle."""
 
     STATES = {
-        "pending": (FG_MUTED, False),
+        "pending": (None, False),  # None → use palette Mid at paint time
         "active":  (ACCENT, True),
         "done":    (OK, True),
         "error":   (ERR, True),
@@ -123,6 +135,8 @@ class StatusDot(QtWidgets.QLabel):
 
     def set_state(self, state: str) -> None:
         color, filled = self.STATES.get(state, self.STATES["pending"])
+        if color is None:
+            color = _palette_mid()
         pm = QtGui.QPixmap(14, 14)
         pm.fill(QtCore.Qt.transparent)
         p = QtGui.QPainter(pm)
@@ -130,74 +144,95 @@ class StatusDot(QtWidgets.QLabel):
         pen = QtGui.QPen(QtGui.QColor(color))
         pen.setWidth(2)
         p.setPen(pen)
-        if filled:
-            p.setBrush(QtGui.QColor(color))
-        else:
-            p.setBrush(QtCore.Qt.NoBrush)
+        p.setBrush(QtGui.QColor(color) if filled else QtCore.Qt.NoBrush)
         p.drawEllipse(3, 3, 8, 8)
         p.end()
         self.setPixmap(pm)
 
 
+def _gutter(dot: QtWidgets.QWidget | None = None) -> QtWidgets.QWidget:
+    """Left column with a top-aligned status bullet (or blank)."""
+    w = QtWidgets.QWidget()
+    w.setFixedWidth(GUTTER)
+    w.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Preferred)
+    lay = QtWidgets.QVBoxLayout(w)
+    lay.setContentsMargins(0, 3, 0, 0)
+    lay.setSpacing(0)
+    if dot is not None:
+        lay.addWidget(dot, 0, QtCore.Qt.AlignTop | QtCore.Qt.AlignHCenter)
+    return w
+
+
+# --- message rows -------------------------------------------------------
+
 class _UserRow(QtWidgets.QWidget):
+    """User prompt: a compact dark block, flush with the content column."""
+
     def __init__(self, text: str):
         super().__init__()
-        outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(10, 10, 10, 6)
+        outer = QtWidgets.QHBoxLayout(self)
+        outer.setContentsMargins(10, 10, 12, 6)
         outer.setSpacing(0)
+        outer.addSpacing(GUTTER - 10)
 
         frame = QtWidgets.QFrame()
-        frame.setObjectName("UserPromptFrame")
         frame.setStyleSheet(
-            f"QFrame#UserPromptFrame {{"
-            f"  background: #202020;"
-            f"  border-left: 2px solid {ACCENT};"
-            f"  border-top-left-radius: 4px;"
-            f"  border-bottom-left-radius: 4px;"
-            f"  border-top-right-radius: 4px;"
-            f"  border-bottom-right-radius: 4px;"
-            f"}}"
+            f"QFrame {{ background: {BG_USER}; border-radius: 6px; }}"
         )
         fl = QtWidgets.QVBoxLayout(frame)
-        fl.setContentsMargins(10, 6, 10, 8)
+        fl.setContentsMargins(12, 8, 12, 8)
         fl.setSpacing(2)
-
-        tag = QtWidgets.QLabel(translate("CADAgent", "YOU"))
-        tag.setStyleSheet(
-            f"color: {FG_MUTED}; font-size: 9px; font-weight: 700;"
-            f"letter-spacing: 1px; background: transparent; border: none;"
-        )
-        fl.addWidget(tag)
 
         body = QtWidgets.QLabel(text)
         body.setWordWrap(True)
         body.setTextInteractionFlags(_SELECTABLE)
         body.setCursor(QtCore.Qt.IBeamCursor)
         body.setStyleSheet(
-            f"color: {FG}; font-weight: 500; background: transparent; border: none;"
+            f"color: {FG}; background: transparent; border: none;"
         )
         fl.addWidget(body)
 
-        outer.addWidget(frame)
+        outer.addWidget(frame, 1)
 
 
 class _AssistantRow(QtWidgets.QWidget):
-    """Flowing assistant text - flush left, markdown-rendered."""
+    """Flowing assistant text — content column, no gutter bullet."""
 
-    _DOC_STYLE = (
-        f"pre, code {{ background: {BG_CODE}; color: {FG};"
-        f" font-family: {MONO_FAMILY}; font-size: 11px; }}"
-        f"pre {{ padding: 6px 8px; }}"
-        f"code {{ padding: 0 3px; }}"
-        f"h1, h2, h3 {{ color: {FG}; }}"
-        f"a {{ color: {ACCENT}; }}"
-    )
+    @staticmethod
+    def _doc_style() -> str:
+        # QTextDocument CSS doesn't evaluate palette(); resolve real hex now.
+        # Derive code bg by blending window text ~15% into the window color so
+        # it reads as a subtle inset on either light or dark FreeCAD themes.
+        app = QtWidgets.QApplication.instance()
+        pal = app.palette() if app is not None else QtGui.QPalette()
+        win = pal.color(QtGui.QPalette.Window)
+        txt = pal.color(QtGui.QPalette.WindowText)
+        code_bg = QtGui.QColor(
+            int(win.red() * 0.85 + txt.red() * 0.15),
+            int(win.green() * 0.85 + txt.green() * 0.15),
+            int(win.blue() * 0.85 + txt.blue() * 0.15),
+        ).name()
+        fg = txt.name()
+        return (
+            f"pre, code {{ background: {code_bg}; color: {fg};"
+            f" font-family: {MONO_FAMILY}; font-size: 11px; }}"
+            f"pre {{ padding: 6px 8px; }}"
+            f"code {{ padding: 0 3px; }}"
+            f"h1, h2, h3 {{ color: {fg}; }}"
+            f"a {{ color: {ACCENT}; }}"
+            f"ul, ol {{ margin-left: 16px; }}"
+        )
 
     def __init__(self):
         super().__init__()
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(16, 4, 10, 6)
+        self._DOC_STYLE = self._doc_style()
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Maximum
+        )
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(10, 4, 12, 4)
         lay.setSpacing(0)
+        lay.addWidget(_gutter())
 
         self._buffer = ""
         self._body = QtWidgets.QTextEdit()
@@ -209,20 +244,32 @@ class _AssistantRow(QtWidgets.QWidget):
         self._body.document().setDefaultStyleSheet(self._DOC_STYLE)
         self._body.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self._body.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self._body.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
+        self._body.setFixedHeight(18)
         self._body.setTextInteractionFlags(
             QtCore.Qt.TextSelectableByMouse
             | QtCore.Qt.TextSelectableByKeyboard
             | QtCore.Qt.LinksAccessibleByMouse
         )
-        self._body.document().contentsChanged.connect(self._auto_size)
-        lay.addWidget(self._body)
+        lay.addWidget(self._body, 1)
+
+        # Debounce renders: coalesce rapid delta bursts so Qt gets paint
+        # cycles between updates. ~33ms → ~30 fps, smooth without waste.
+        self._render_timer = QtCore.QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.setInterval(33)
+        self._render_timer.timeout.connect(self._flush_render)
 
     def _auto_size(self):
-        vp_w = max(0, self._body.viewport().width())
+        vp_w = self._body.viewport().width()
+        if vp_w <= 0:
+            QtCore.QTimer.singleShot(0, self._auto_size)
+            return
         doc = self._body.document()
-        if vp_w > 0:
-            doc.setTextWidth(vp_w)
-        doc_h = int(doc.size().height()) + 4
+        doc.setTextWidth(vp_w)
+        doc_h = int(doc.size().height()) + 2
         self._body.setFixedHeight(max(18, doc_h))
 
     def resizeEvent(self, event):
@@ -231,6 +278,10 @@ class _AssistantRow(QtWidgets.QWidget):
 
     def append(self, text: str) -> None:
         self._buffer += text
+        if not self._render_timer.isActive():
+            self._render_timer.start()
+
+    def _flush_render(self) -> None:
         doc = self._body.document()
         if hasattr(doc, "setMarkdown"):
             doc.setMarkdown(self._buffer)
@@ -240,40 +291,49 @@ class _AssistantRow(QtWidgets.QWidget):
         self._auto_size()
 
     def mark_done(self) -> None:
-        pass
+        self._render_timer.stop()
+        self._flush_render()
 
 
 class _ThinkingRow(QtWidgets.QWidget):
-    """Italic collapsible thinking block."""
+    """Gutter bullet + muted 'Thinking' label, click to expand body."""
 
     def __init__(self, preview: str = ""):
         super().__init__()
-        outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(16, 4, 10, 4)
-        outer.setSpacing(2)
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(10, 4, 12, 4)
+        lay.setSpacing(0)
 
-        self._expanded = True
+        self._dot = StatusDot("pending")
+        lay.addWidget(_gutter(self._dot))
 
-        self._header = QtWidgets.QPushButton(translate("CADAgent", "▾  Thinking"))
+        content = QtWidgets.QVBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(2)
+        lay.addLayout(content, 1)
+
+        self._expanded = False
+
+        self._header = QtWidgets.QPushButton(translate("CADAgent", "Thinking"))
         self._header.setCursor(QtCore.Qt.PointingHandCursor)
         self._header.setStyleSheet(
             f"QPushButton {{ background: transparent; border: none;"
-            f" color: {FG_DIM}; font-style: italic; font-size: 11px;"
+            f" color: {FG_MUTED}; font-size: 12px;"
             f" text-align: left; padding: 0; }}"
-            f"QPushButton:hover {{ color: {FG}; }}"
+            f"QPushButton:hover {{ color: {FG_DIM}; }}"
         )
         self._header.clicked.connect(self._toggle)
-        outer.addWidget(self._header, 0, QtCore.Qt.AlignLeft)
+        content.addWidget(self._header, 0, QtCore.Qt.AlignLeft)
 
         self._body = QtWidgets.QLabel(preview[:2000])
         self._body.setWordWrap(True)
         self._body.setTextInteractionFlags(_SELECTABLE)
         self._body.setCursor(QtCore.Qt.IBeamCursor)
         self._body.setStyleSheet(
-            f"color: {FG_MUTED}; font-style: italic; font-size: 11px;"
-            f" padding-left: 12px;"
+            f"color: {FG_MUTED}; font-size: 11px; padding: 2px 0 0 0;"
         )
-        outer.addWidget(self._body)
+        self._body.setVisible(False)
+        content.addWidget(self._body)
 
     def append(self, text: str) -> None:
         current = self._body.text()
@@ -284,11 +344,10 @@ class _ThinkingRow(QtWidgets.QWidget):
 
     def set_expanded(self, expanded: bool) -> None:
         self._expanded = expanded
-        self._body.setVisible(expanded)
-        caret = "▾" if expanded else "▸"
-        self._header.setText(translate("CADAgent", "{0}  Thinking").format(caret))
+        self._body.setVisible(expanded and bool(self._body.text()))
 
     def collapse(self) -> None:
+        self._dot.set_state("done")
         self.set_expanded(False)
 
 
@@ -296,7 +355,9 @@ class _SystemRow(QtWidgets.QWidget):
     def __init__(self, text: str):
         super().__init__()
         lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(28, 4, 10, 4)
+        lay.setContentsMargins(10, 4, 12, 4)
+        lay.setSpacing(0)
+        lay.addWidget(_gutter())
         lbl = QtWidgets.QLabel(text)
         lbl.setProperty("role", "muted")
         lbl.setWordWrap(True)
@@ -308,10 +369,9 @@ class _ErrorRow(QtWidgets.QWidget):
     def __init__(self, text: str):
         super().__init__()
         lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(8, 6, 10, 6)
-        lay.setSpacing(8)
-        lay.setAlignment(QtCore.Qt.AlignTop)
-        lay.addWidget(StatusDot("error"), 0, QtCore.Qt.AlignTop)
+        lay.setContentsMargins(10, 6, 12, 6)
+        lay.setSpacing(0)
+        lay.addWidget(_gutter(StatusDot("error")))
         lbl = QtWidgets.QLabel(text)
         lbl.setStyleSheet(f"color: {ERR};")
         lbl.setWordWrap(True)
@@ -331,30 +391,11 @@ class _CodeBlock(QtWidgets.QLabel):
         self.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
 
 
-class _ToolHeaderButton(QtWidgets.QAbstractButton):
-    """Transparent button that hosts arbitrary header widgets and toggles."""
-
-    def __init__(self):
-        super().__init__()
-        self.setCursor(QtCore.Qt.PointingHandCursor)
-        self.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._layout = QtWidgets.QHBoxLayout(self)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(8)
-
-    def paintEvent(self, _event):
-        pass  # transparent; children paint themselves
-
-    def layout_(self) -> QtWidgets.QHBoxLayout:
-        return self._layout
-
-
 class _ToolEntry(QtWidgets.QWidget):
-    """Claude Code-style tool block with collapsible IN/OUT body.
+    """Tool block: gutter dot + '**Name**  subtitle' header, indented IN/OUT.
 
-    pending -> expanded caret
-    ok done -> collapsed caret with one-line summary beside title
-    error   -> expanded caret with red dot
+    Click the title to toggle body visibility. The body is visible while
+    pending and collapses automatically once a successful result lands.
     """
 
     def __init__(self, tool_name: str, tool_input: dict):
@@ -362,71 +403,79 @@ class _ToolEntry(QtWidgets.QWidget):
         self._short_name = shorten_tool_name(tool_name)
         self._summary = summarise_tool_input(tool_input)
         self._expanded = True
-        self._result_preview = ""
+        self._tool_input = tool_input
 
-        outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(8, 6, 10, 6)
-        outer.setSpacing(4)
-
-        self._header = _ToolHeaderButton()
-        hl = self._header.layout_()
-
-        self._caret = QtWidgets.QLabel("▾")
-        self._caret.setStyleSheet(
-            f"color: {FG_DIM}; font-size: 10px; background: transparent;"
-        )
-        self._caret.setFixedWidth(12)
-        hl.addWidget(self._caret, 0, QtCore.Qt.AlignVCenter)
+        outer = QtWidgets.QHBoxLayout(self)
+        outer.setContentsMargins(10, 6, 12, 6)
+        outer.setSpacing(0)
 
         self._dot = StatusDot("pending")
-        hl.addWidget(self._dot, 0, QtCore.Qt.AlignVCenter)
+        outer.addWidget(_gutter(self._dot))
+
+        col = QtWidgets.QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(4)
+        outer.addLayout(col, 1)
+
+        # --- clickable header: bold name + subtitle
+        self._header_btn = QtWidgets.QPushButton()
+        self._header_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._header_btn.setStyleSheet(
+            "QPushButton { background: transparent; border: none;"
+            " text-align: left; padding: 0; }"
+        )
+        hl = QtWidgets.QHBoxLayout(self._header_btn)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(8)
 
         self._title = QtWidgets.QLabel(self._short_name)
         self._title.setProperty("role", "tool_title")
-        self._title.setStyleSheet(
-            f"color: {FG}; font-weight: 600; background: transparent;"
-        )
         hl.addWidget(self._title)
 
-        self._result_chip = QtWidgets.QLabel("")
-        self._result_chip.setStyleSheet(
-            f"color: {FG_DIM}; background: transparent; font-size: 11px;"
-        )
-        self._result_chip.setWordWrap(False)
-        hl.addWidget(self._result_chip, 1)
+        self._sub = QtWidgets.QLabel(self._summary)
+        self._sub.setProperty("role", "tool_subtitle")
+        self._sub.setWordWrap(False)
+        hl.addWidget(self._sub, 1)
 
-        outer.addWidget(self._header)
+        self._header_btn.clicked.connect(self._toggle)
+        col.addWidget(self._header_btn)
 
-        # --- collapsible body ---
+        # --- collapsible body
         self._body = QtWidgets.QWidget()
         bl = QtWidgets.QVBoxLayout(self._body)
-        bl.setContentsMargins(22, 0, 0, 0)
+        bl.setContentsMargins(0, 2, 0, 0)
         bl.setSpacing(4)
 
-        if self._summary:
-            sub = QtWidgets.QLabel(self._summary)
-            sub.setProperty("role", "tool_subtitle")
-            sub.setWordWrap(True)
-            selectable(sub)
-            bl.addWidget(sub)
+        self._body_stack = bl
 
-        in_row = QtWidgets.QHBoxLayout()
-        in_row.setContentsMargins(0, 0, 0, 0)
-        in_row.setSpacing(8)
-        in_row.setAlignment(QtCore.Qt.AlignTop)
-        in_row.addWidget(badge(translate("CADAgent", "IN")), 0, QtCore.Qt.AlignTop)
-        in_row.addWidget(_CodeBlock(pretty_input(tool_input)), 1)
-        bl.addLayout(in_row)
+        in_row = self._make_io_row(translate("CADAgent", "IN"), pretty_input(tool_input), False)
+        bl.addWidget(in_row)
 
-        self._out_row_layout = QtWidgets.QHBoxLayout()
-        self._out_row_layout.setContentsMargins(0, 0, 0, 0)
-        self._out_row_layout.setSpacing(8)
-        self._out_row_layout.setAlignment(QtCore.Qt.AlignTop)
-        bl.addLayout(self._out_row_layout)
+        self._out_row: QtWidgets.QWidget | None = None
 
-        outer.addWidget(self._body)
+        col.addWidget(self._body)
 
-        self._header.clicked.connect(self._toggle)
+    def _make_io_row(self, label_text: str, code_text: str, is_error: bool) -> QtWidgets.QWidget:
+        row = QtWidgets.QWidget()
+        rl = QtWidgets.QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(8)
+        rl.setAlignment(QtCore.Qt.AlignTop)
+
+        label = QtWidgets.QLabel(label_text)
+        label.setProperty("role", "io_label")
+        label.setFixedWidth(IO_COL)
+        rl.addWidget(label, 0, QtCore.Qt.AlignTop)
+
+        block = _CodeBlock(code_text)
+        if is_error:
+            block.setStyleSheet(
+                f"background:{BG_CODE};color:{ERR};"
+                f"border:1px solid {BORDER_SOFT};border-radius:4px;padding:6px 10px;"
+                f"font-family:{MONO_FAMILY};font-size:11px;"
+            )
+        rl.addWidget(block, 1)
+        return row
 
     def _toggle(self) -> None:
         self.set_expanded(not self._expanded)
@@ -434,41 +483,21 @@ class _ToolEntry(QtWidgets.QWidget):
     def set_expanded(self, expanded: bool) -> None:
         self._expanded = expanded
         self._body.setVisible(expanded)
-        self._caret.setText("▾" if expanded else "▸")
 
     def set_result(self, content, is_error: bool) -> None:
-        while self._out_row_layout.count():
-            item = self._out_row_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        if self._out_row is not None:
+            self._out_row.deleteLater()
+            self._out_row = None
 
         preview = preview_result(content)
-        self._result_preview = preview
-        badge_text = translate("CADAgent", "ERR") if is_error else translate("CADAgent", "OUT")
-        self._out_row_layout.addWidget(
-            badge(badge_text), 0, QtCore.Qt.AlignTop
-        )
-        block = _CodeBlock(preview)
-        if is_error:
-            block.setStyleSheet(
-                f"background:{BG_CODE};color:{ERR};"
-                f"border:1px solid {BORDER_SOFT};border-radius:4px;padding:6px 8px;"
-                f"font-family:{MONO_FAMILY};font-size:11px;"
-            )
-        self._out_row_layout.addWidget(block, 1)
-        self._dot.set_state("error" if is_error else "done")
+        label = translate("CADAgent", "ERR") if is_error else translate("CADAgent", "OUT")
+        row = self._make_io_row(label, preview, is_error)
+        self._body_stack.addWidget(row)
+        self._out_row = row
 
-        head = preview.strip().splitlines()[0] if preview.strip() else ""
-        if len(head) > 80:
-            head = head[:77] + "…"
-        if is_error:
-            self._result_chip.setText("")
-            self.set_expanded(True)
-        else:
-            mark = "✓"
-            self._result_chip.setText(f"  {mark} {head}" if head else f"  {mark}")
-            self.set_expanded(False)
+        self._dot.set_state("error" if is_error else "done")
+        # Successful runs collapse to keep the stream skimmable.
+        self.set_expanded(is_error)
 
 
 class _TurnFooter(QtWidgets.QWidget):
@@ -509,16 +538,16 @@ class _ToolCallCard(QtWidgets.QWidget):
         self._decided = False
 
         outer = QtWidgets.QHBoxLayout(self)
-        outer.setContentsMargins(8, 6, 10, 6)
-        outer.setSpacing(8)
-        outer.setAlignment(QtCore.Qt.AlignTop)
+        outer.setContentsMargins(10, 6, 12, 6)
+        outer.setSpacing(0)
 
         self._dot = StatusDot("active")
-        outer.addWidget(self._dot, 0, QtCore.Qt.AlignTop)
+        outer.addWidget(_gutter(self._dot))
 
         col = QtWidgets.QVBoxLayout()
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(6)
+        outer.addLayout(col, 1)
 
         header = QtWidgets.QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -545,7 +574,10 @@ class _ToolCallCard(QtWidgets.QWidget):
         in_row.setContentsMargins(0, 0, 0, 0)
         in_row.setSpacing(8)
         in_row.setAlignment(QtCore.Qt.AlignTop)
-        in_row.addWidget(badge(translate("CADAgent", "IN")), 0, QtCore.Qt.AlignTop)
+        in_label = QtWidgets.QLabel(translate("CADAgent", "IN"))
+        in_label.setProperty("role", "io_label")
+        in_label.setFixedWidth(IO_COL)
+        in_row.addWidget(in_label, 0, QtCore.Qt.AlignTop)
         in_row.addWidget(_CodeBlock(pretty_input(tool_input)), 1)
         col.addLayout(in_row)
 
@@ -564,8 +596,6 @@ class _ToolCallCard(QtWidgets.QWidget):
         btn_row.addWidget(self._reject_btn)
         btn_row.addWidget(self._apply_btn)
         col.addLayout(btn_row)
-
-        outer.addLayout(col, 1)
 
         self._apply_btn.clicked.connect(
             lambda: self._decide(True, "", translate("CADAgent", "applied"))
