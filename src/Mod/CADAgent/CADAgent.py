@@ -119,12 +119,87 @@ def _make_open_panel_command():
     return CADAgent_OpenPanel
 
 
+def _make_configure_llm_command():
+    """Build and return the CADAgent_ConfigureLLM command class."""
+
+    PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/CADAgent"
+
+    def _open_dialog():
+        params = App.ParamGet(PARAM_PATH)
+        dlg = QtWidgets.QDialog(Gui.getMainWindow())
+        dlg.setWindowTitle(translate("CADAgent", "Configure LLM"))
+        form = QtWidgets.QFormLayout(dlg)
+
+        url_edit = QtWidgets.QLineEdit(params.GetString("BaseURL", ""), dlg)
+        url_edit.setPlaceholderText("http://localhost:4000")
+        form.addRow(translate("CADAgent", "LiteLLM proxy URL"), url_edit)
+
+        key_edit = QtWidgets.QLineEdit(params.GetString("ApiKey", ""), dlg)
+        key_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+        form.addRow(translate("CADAgent", "LiteLLM proxy key"), key_edit)
+
+        model_edit = QtWidgets.QLineEdit(params.GetString("Model", ""), dlg)
+        model_edit.setPlaceholderText("gpt-5-mini")
+        form.addRow(translate("CADAgent", "Model"), model_edit)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
+            parent=dlg,
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+
+        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+            return
+
+        params.SetString("BaseURL", url_edit.text().strip())
+        params.SetString("ApiKey", key_edit.text())
+        params.SetString("Model", model_edit.text().strip())
+
+        global _RUNTIME
+        if _RUNTIME is not None:
+            try:
+                _RUNTIME.aclose()
+            except Exception:
+                pass
+            _RUNTIME = None
+        App.Console.PrintMessage(
+            "CAD Agent: LLM settings updated; next turn uses the new config.\n"
+        )
+
+    class CADAgent_ConfigureLLM:
+        def GetResources(self):
+            return {
+                "MenuText": translate("CADAgent", "Configure LLM…"),
+                "ToolTip": translate(
+                    "CADAgent",
+                    "Set the LiteLLM proxy URL, key, and model",
+                ),
+                "Pixmap": ":/CADAgent/icons/CADAgent.svg",
+            }
+
+        def IsActive(self):
+            return True
+
+        def Activated(self):
+            _open_dialog()
+
+    return CADAgent_ConfigureLLM
+
+
 def register_commands() -> None:
     """Register the CAD Agent Gui commands (idempotent)."""
     try:
         Gui.addCommand("CADAgent_OpenPanel", _make_open_panel_command()())
     except Exception:
         # addCommand raises if the command is already registered; ignore.
+        App.Console.PrintLog(
+            f"CADAgent: addCommand skipped\n{traceback.format_exc()}"
+        )
+    try:
+        Gui.addCommand("CADAgent_ConfigureLLM", _make_configure_llm_command()())
+    except Exception:
         App.Console.PrintLog(
             f"CADAgent: addCommand skipped\n{traceback.format_exc()}"
         )

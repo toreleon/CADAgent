@@ -162,13 +162,13 @@ QPlainTextEdit#ComposerInput {{
 
 QPushButton[role="icon"], QToolButton[role="icon"] {{
     background: transparent;
-    color: {FG_MUTED};
+    color: {FG};
     border: none;
     padding: 2px 4px;
     font-size: 14px;
 }}
 QPushButton[role="icon"]:hover, QToolButton[role="icon"]:hover {{
-    color: {FG};
+    color: {ACCENT};
 }}
 QPushButton#SendButton {{
     background: {ACCENT};

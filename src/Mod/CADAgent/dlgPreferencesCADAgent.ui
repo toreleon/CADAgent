@@ -23,7 +23,7 @@
       <item row="0" column="0">
        <widget class="QLabel" name="labelApiKey">
         <property name="text">
-         <string>Anthropic API key</string>
+         <string>LiteLLM proxy key</string>
         </property>
        </widget>
       </item>
@@ -33,7 +33,7 @@
          <enum>QLineEdit::Password</enum>
         </property>
         <property name="toolTip">
-         <string>Stored in FreeCAD's parameter system. If empty, the agent falls back to the ANTHROPIC_API_KEY environment variable. When using a LiteLLM proxy, put the proxy key here (e.g. sk-1234).</string>
+         <string>API key for your LiteLLM proxy (e.g. sk-1234). Stored in FreeCAD's parameter system; falls back to the ANTHROPIC_API_KEY environment variable when empty.</string>
         </property>
         <property name="prefEntry" stdset="0">
          <cstring>ApiKey</cstring>
@@ -46,14 +46,14 @@
       <item row="1" column="0">
        <widget class="QLabel" name="labelBaseURL">
         <property name="text">
-         <string>Base URL (optional)</string>
+         <string>LiteLLM proxy URL</string>
         </property>
        </widget>
       </item>
       <item row="1" column="1">
        <widget class="Gui::PrefLineEdit" name="editBaseURL">
         <property name="toolTip">
-         <string>Optional Anthropic-compatible endpoint. Set to your LiteLLM proxy (e.g. http://localhost:4000) to route through OpenAI, Bedrock, Azure, Vertex, etc. Leave empty to talk to api.anthropic.com directly.</string>
+         <string>Required. URL of your LiteLLM proxy (e.g. http://localhost:4000). The proxy exposes the Anthropic Messages API and routes requests to OpenAI, Bedrock, Azure, Vertex, etc.</string>
         </property>
         <property name="placeholderText">
          <string>http://localhost:4000</string>
@@ -88,7 +88,7 @@
          <bool>true</bool>
         </property>
         <property name="toolTip">
-         <string>Claude model to use. Opus is strongest; Haiku is fastest.</string>
+         <string>Model name as configured in your LiteLLM proxy. The proxy maps this to the underlying provider (OpenAI, Bedrock, Azure, Vertex, Anthropic, etc.).</string>
         </property>
         <property name="prefEntry" stdset="0">
          <cstring>Model</cstring>

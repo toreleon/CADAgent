@@ -150,6 +150,17 @@ class ChatPanel(QtWidgets.QWidget):
         self._history_btn.clicked.connect(self._on_history_clicked)
         lay.addWidget(self._history_btn)
 
+        self._config_btn = QtWidgets.QToolButton()
+        self._config_btn.setText("⚙")
+        self._config_btn.setProperty("role", "icon")
+        self._config_btn.setToolTip(
+            translate("CADAgent", "Configure LLM (URL, key, model)")
+        )
+        self._config_btn.setCursor(QtCore.Qt.PointingHandCursor)
+        self._config_btn.setFixedSize(22, 22)
+        self._config_btn.clicked.connect(self._on_configure_clicked)
+        lay.addWidget(self._config_btn)
+
         # Kept so session-title updates from existing code still have a sink.
         self._title_lbl = QtWidgets.QLabel("")
         self._title_lbl.setVisible(False)
@@ -358,6 +369,13 @@ class ChatPanel(QtWidgets.QWidget):
         self._current_session_id = None
         self._title_lbl.setText(translate("CADAgent", "New chat"))
         self._reset_stream()
+
+    def _on_configure_clicked(self) -> None:
+        try:
+            import FreeCADGui as Gui
+            Gui.runCommand("CADAgent_ConfigureLLM")
+        except Exception as exc:
+            self.show_error(str(exc))
 
     def _on_history_clicked(self) -> None:
         doc = self._bound_doc or App.ActiveDocument

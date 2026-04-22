@@ -23,12 +23,21 @@ import traceback
 # arrive progressively from the proxy or in one burst at the end.
 _DEBUG = bool(os.environ.get("CADAGENT_DEBUG"))
 
+# Per-turn stopwatch, reset when ask() sends a query. Lets the debug log print
+# seconds-since-query rather than raw monotonic time, so "burst at the end"
+# vs "spread across the turn" is obvious at a glance.
+_turn_t0: float | None = None
+
 
 def _dbg(tag: str) -> None:
     if _DEBUG:
         try:
+            if _turn_t0 is None:
+                stamp = f"{time.monotonic():.3f}"
+            else:
+                stamp = f"+{time.monotonic() - _turn_t0:6.3f}s"
             print(
-                f"[cadagent {time.monotonic():.3f}] {tag}",
+                f"[cadagent {stamp}] {tag}",
                 file=sys.__stderr__,
                 flush=True,
             )
@@ -82,20 +91,25 @@ def _resolve_api_key() -> str:
     key = params.GetString("ApiKey", "") or os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         raise RuntimeError(
-            "No ANTHROPIC_API_KEY configured. Set one in "
-            "Preferences \u2192 CAD Agent, or export ANTHROPIC_API_KEY. "
-            "When routing through a LiteLLM proxy, use the proxy's key "
-            "(e.g. sk-1234)."
+            "No LiteLLM proxy key configured. Set one in "
+            "Preferences \u2192 CAD Agent, or export ANTHROPIC_API_KEY."
         )
     return key
 
 
 def _resolve_base_url() -> str:
     params = App.ParamGet(PARAM_PATH)
-    return (
+    url = (
         params.GetString("BaseURL", "")
         or os.environ.get("ANTHROPIC_BASE_URL", "")
     )
+    if not url:
+        raise RuntimeError(
+            "No LiteLLM proxy URL configured. Set one in "
+            "Preferences \u2192 CAD Agent (e.g. http://localhost:4000), "
+            "or export ANTHROPIC_BASE_URL."
+        )
+    return url
 
 
 def _resolve_model() -> str:
@@ -201,15 +215,12 @@ class AgentRuntime:
         if self.client is not None:
             return
         os.environ["ANTHROPIC_API_KEY"] = _resolve_api_key()
-        base_url = _resolve_base_url()
-        if base_url:
-            os.environ["ANTHROPIC_BASE_URL"] = base_url
+        os.environ["ANTHROPIC_BASE_URL"] = _resolve_base_url()
         model = _resolve_model()
-        # Proxies (LiteLLM, copilot-api, …) often only expose the single model
-        # the user configured and reject Anthropic's default Haiku used for
-        # background tasks (title generation, compaction). Pin the small/fast
-        # model to the configured model so every request routes to something
-        # the proxy recognises.
+        # LiteLLM typically only exposes the models configured in its proxy
+        # and rejects the SDK's default Haiku used for background tasks (title
+        # generation, compaction). Pin the small/fast model to the configured
+        # model so every request routes to something the proxy recognises.
         os.environ["ANTHROPIC_MODEL"] = model
         os.environ["ANTHROPIC_SMALL_FAST_MODEL"] = model
         server = cad_tools.build_mcp_server()
@@ -232,6 +243,8 @@ class AgentRuntime:
             assert self.client is not None
             self._pending_first_prompt = user_text
             wrapped = wrap_user_message(user_text)
+            global _turn_t0
+            _turn_t0 = time.monotonic()
             await self.client.query(wrapped)
             _dbg("ask: sent query, awaiting stream")
             async for msg in self.client.receive_response():

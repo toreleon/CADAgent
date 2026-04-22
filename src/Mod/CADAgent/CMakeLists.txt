@@ -21,6 +21,7 @@ SET(CADAgent_AGENT
     agent/memory.py
     agent/permissions.py
     agent/prompts.py
+    agent/sessions.py
 )
 
 SET(CADAgent_UI
@@ -29,6 +30,7 @@ SET(CADAgent_UI
     agent/ui/web_panel.py
     agent/ui/widgets.py
     agent/ui/composer.py
+    agent/ui/history_popup.py
     agent/ui/styles.py
 )
 
