@@ -78,6 +78,7 @@ finally:
 
 from . import sessions as cad_sessions
 from . import tools as cad_tools
+from . import ui_bridge
 from .context import wrap_user_message
 from .permissions import make_can_use_tool
 from .prompts import CAD_SYSTEM_PROMPT
@@ -140,6 +141,7 @@ class _PanelProxy(QtCore.QObject):
     turnComplete = QtCore.Signal()
     error = QtCore.Signal(str)
     permissionRequest = QtCore.Signal(str, object, object)  # name, input, cf_future
+    askUserQuestion = QtCore.Signal(object, object)  # questions, cf_future
     sessionChanged = QtCore.Signal(str)  # new session_id (captured from SDK)
 
     def __init__(self, panel):
@@ -153,6 +155,7 @@ class _PanelProxy(QtCore.QObject):
         self.turnComplete.connect(panel.mark_turn_complete)
         self.error.connect(panel.show_error)
         self.permissionRequest.connect(self._on_permission_request)
+        self.askUserQuestion.connect(self._on_ask_user_question)
         if hasattr(panel, "on_session_changed"):
             self.sessionChanged.connect(panel.on_session_changed)
 
@@ -167,11 +170,20 @@ class _PanelProxy(QtCore.QObject):
             if not cf_future.done():
                 cf_future.set_exception(exc)
 
+    def _on_ask_user_question(self, questions, cf_future):
+        """Runs on the GUI thread — surfaces an AskUserQuestion card."""
+        try:
+            self._panel.ask_user_question_threadsafe(questions, cf_future)
+        except Exception as exc:
+            if not cf_future.done():
+                cf_future.set_exception(exc)
+
 
 class AgentRuntime:
     def __init__(self, panel):
         self.panel = panel
         self._proxy = _PanelProxy(panel)
+        ui_bridge.set_proxy(self._proxy)
         self.client: ClaudeSDKClient | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None

@@ -25,6 +25,7 @@ from .styles import build_panel_qss
 from .widgets import (
     GUTTER,
     IO_COL,
+    _AskUserQuestionCard,
     _AssistantRow,
     _CodeBlock,
     _ErrorRow,
@@ -278,6 +279,28 @@ class ChatPanel(QtWidgets.QWidget):
     def show_error(self, message: str) -> None:
         self._close_assistant()
         self._append(_ErrorRow(message))
+
+    def ask_user_question(
+        self, questions: list[dict], future=None
+    ) -> "_AskUserQuestionCard":
+        """Render an AskUserQuestion card inline and return it.
+
+        ``future`` is any object with ``done()`` / ``set_result()`` semantics
+        (either ``concurrent.futures.Future`` or ``asyncio.Future``). It gets
+        resolved with a list of ``{header, selected, skipped}`` dicts when the
+        user clicks Submit or Skip. Pass ``None`` for fire-and-forget use.
+        """
+        self._close_assistant()
+        self._collapse_thinking()
+        card = _AskUserQuestionCard(questions, future)
+        self._append(card)
+        return card
+
+    def ask_user_question_threadsafe(
+        self, questions: list[dict], cf_future
+    ) -> None:
+        """Slot for cross-thread AskUserQuestion requests via PanelProxy."""
+        self.ask_user_question(questions, cf_future)
 
     def request_permission_threadsafe(
         self, tool_name: str, tool_input: dict, cf_future

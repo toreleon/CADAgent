@@ -22,6 +22,7 @@ SET(CADAgent_AGENT
     agent/permissions.py
     agent/prompts.py
     agent/sessions.py
+    agent/ui_bridge.py
 )
 
 SET(CADAgent_UI

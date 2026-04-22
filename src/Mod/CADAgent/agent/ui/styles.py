@@ -228,6 +228,20 @@ QPushButton[role="reject"] {{
 }}
 QPushButton[role="reject"]:hover {{ color: {ERR}; border-color: {ERR}; }}
 
+QPushButton[role="option"] {{
+    background: transparent;
+    color: {FG};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+    padding: 0;
+    text-align: left;
+}}
+QPushButton[role="option"]:hover {{ border-color: {ACCENT_DIM}; }}
+QPushButton[role="option"]:checked {{
+    border-color: {ACCENT};
+    background: {BG_ALT};
+}}
+
 QFrame#HistoryPopup {{
     background: {BG_ALT};
     border: 1px solid {BORDER};

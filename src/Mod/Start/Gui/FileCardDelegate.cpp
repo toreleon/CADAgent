@@ -108,11 +108,14 @@ void FileCardDelegate::paint(
         pixmap = generateThumbnail(path);
     }
 
-    QPixmap scaledPixmap = pixmap.scaled(
-        QSize(thumbnailSize, thumbnailSize),
-        Qt::KeepAspectRatio,
-        Qt::SmoothTransformation
-    );
+    QPixmap scaledPixmap;
+    if (!pixmap.isNull()) {
+        scaledPixmap = pixmap.scaled(
+            QSize(thumbnailSize, thumbnailSize),
+            Qt::KeepAspectRatio,
+            Qt::SmoothTransformation
+        );
+    }
 
     // Step 4: Positioning
     QRect thumbnailRect(option.rect.x() + margin, option.rect.y() + margin, thumbnailSize, thumbnailSize);
@@ -133,7 +136,9 @@ void FileCardDelegate::paint(
     // Step 5: Draw
     QRect pixmapRect(thumbnailRect.topLeft(), scaledPixmap.size());
     pixmapRect.moveCenter(thumbnailRect.center());
-    painter->drawPixmap(pixmapRect.topLeft(), scaledPixmap);
+    if (!scaledPixmap.isNull()) {
+        painter->drawPixmap(pixmapRect.topLeft(), scaledPixmap);
+    }
     painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, elidedName);
     painter->drawText(sizeRect, Qt::AlignLeft | Qt::AlignTop, size);
     painter->restore();

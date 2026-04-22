@@ -618,3 +618,217 @@ class _ToolCallCard(QtWidgets.QWidget):
         self._dot.set_state("done" if allowed else "error")
         if not self._future.done():
             self._future.set_result(Decision(allowed=allowed, reason=reason))
+
+
+class _OptionButton(QtWidgets.QPushButton):
+    """Checkable option row: bold label on top, optional description beneath."""
+
+    def __init__(self, label: str, description: str, multi: bool):
+        super().__init__()
+        self._label_text = label
+        self._multi = multi
+        self.setCheckable(True)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setProperty("role", "option")
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
+        )
+
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(10)
+
+        self._marker = QtWidgets.QLabel("◻" if multi else "○")
+        self._marker.setFixedWidth(14)
+        self._marker.setStyleSheet(f"color: {FG_MUTED}; background: transparent;")
+        lay.addWidget(self._marker, 0, QtCore.Qt.AlignTop)
+
+        textcol = QtWidgets.QVBoxLayout()
+        textcol.setContentsMargins(0, 0, 0, 0)
+        textcol.setSpacing(2)
+        lay.addLayout(textcol, 1)
+
+        lbl = QtWidgets.QLabel(label)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(
+            f"color: {FG}; font-weight: 600; background: transparent;"
+        )
+        textcol.addWidget(lbl)
+
+        if description:
+            d = QtWidgets.QLabel(description)
+            d.setWordWrap(True)
+            d.setStyleSheet(
+                f"color: {FG_MUTED}; font-size: 11px; background: transparent;"
+            )
+            textcol.addWidget(d)
+
+        self.toggled.connect(self._on_toggled)
+
+    def label(self) -> str:
+        return self._label_text
+
+    def _on_toggled(self, checked: bool) -> None:
+        if self._multi:
+            self._marker.setText("☑" if checked else "◻")
+        else:
+            self._marker.setText("●" if checked else "○")
+        color = ACCENT if checked else FG_MUTED
+        self._marker.setStyleSheet(f"color: {color}; background: transparent;")
+
+
+class _AskUserQuestionCard(QtWidgets.QWidget):
+    """Inline card asking the user one or more multiple-choice questions.
+
+    ``questions`` is a list of ``{question, header?, options: [{label,
+    description?}], multiSelect?}`` dicts. On Submit / Skip the supplied
+    ``concurrent.futures.Future`` is resolved with a list of answers shaped as
+    ``{header, selected, skipped}`` where ``selected`` is a single label for
+    single-select questions, a list of labels for multi-select, and ``None``
+    when the user skipped.
+    """
+
+    def __init__(self, questions: list[dict], future):
+        super().__init__()
+        self._future = future
+        self._decided = False
+        self._questions = list(questions or [])
+        self._groups: list[tuple[dict, list[_OptionButton]]] = []
+
+        outer = QtWidgets.QHBoxLayout(self)
+        outer.setContentsMargins(10, 6, 12, 6)
+        outer.setSpacing(0)
+
+        self._dot = StatusDot("active")
+        outer.addWidget(_gutter(self._dot))
+
+        col = QtWidgets.QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(10)
+        outer.addLayout(col, 1)
+
+        header = QtWidgets.QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(8)
+        title = QtWidgets.QLabel(translate("CADAgent", "Ask user"))
+        title.setProperty("role", "tool_title")
+        header.addWidget(title)
+        pending = QtWidgets.QLabel(translate("CADAgent", "awaiting answer"))
+        pending.setProperty("role", "chip_accent")
+        header.addWidget(pending)
+        header.addStretch(1)
+        col.addLayout(header)
+
+        for q in self._questions:
+            col.addWidget(self._build_question(q))
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
+        self._status = QtWidgets.QLabel("")
+        self._status.setProperty("role", "muted")
+        self._skip_btn = QtWidgets.QPushButton(translate("CADAgent", "Skip"))
+        self._skip_btn.setProperty("role", "reject")
+        self._submit_btn = QtWidgets.QPushButton(translate("CADAgent", "Submit"))
+        self._submit_btn.setProperty("role", "apply")
+        self._submit_btn.setDefault(True)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self._status)
+        btn_row.addWidget(self._skip_btn)
+        btn_row.addWidget(self._submit_btn)
+        col.addLayout(btn_row)
+
+        self._submit_btn.clicked.connect(self._on_submit)
+        self._skip_btn.clicked.connect(self._on_skip)
+
+    def _build_question(self, q: dict) -> QtWidgets.QWidget:
+        box = QtWidgets.QWidget()
+        bl = QtWidgets.QVBoxLayout(box)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(4)
+
+        header_text = str(q.get("header") or "").strip()
+        q_text = str(q.get("question") or "").strip()
+        multi = bool(q.get("multiSelect"))
+
+        if q_text:
+            qlbl = QtWidgets.QLabel(q_text)
+            qlbl.setWordWrap(True)
+            qlbl.setStyleSheet(
+                f"color: {FG}; font-weight: 600; background: transparent;"
+            )
+            bl.addWidget(qlbl)
+        if header_text and header_text != q_text:
+            hdr = QtWidgets.QLabel(header_text)
+            hdr.setProperty("role", "muted")
+            hdr.setWordWrap(True)
+            bl.addWidget(hdr)
+
+        group = QtWidgets.QButtonGroup(box)
+        group.setExclusive(not multi)
+        buttons: list[_OptionButton] = []
+        for opt in (q.get("options") or []):
+            label = str(opt.get("label") or "").strip()
+            if not label:
+                continue
+            desc = str(opt.get("description") or "").strip()
+            btn = _OptionButton(label, desc, multi)
+            group.addButton(btn)
+            buttons.append(btn)
+            bl.addWidget(btn)
+
+        self._groups.append((q, buttons))
+        return box
+
+    def _collect_answers(self) -> list[dict]:
+        answers = []
+        for q, buttons in self._groups:
+            multi = bool(q.get("multiSelect"))
+            chosen = [b.label() for b in buttons if b.isChecked()]
+            answers.append({
+                "header": q.get("header") or q.get("question") or "",
+                "selected": chosen if multi else (chosen[0] if chosen else None),
+                "skipped": False,
+            })
+        return answers
+
+    def _skipped_answers(self) -> list[dict]:
+        answers = []
+        for q, _buttons in self._groups:
+            multi = bool(q.get("multiSelect"))
+            answers.append({
+                "header": q.get("header") or q.get("question") or "",
+                "selected": [] if multi else None,
+                "skipped": True,
+            })
+        return answers
+
+    def _on_submit(self) -> None:
+        if self._decided:
+            return
+        self._finish(
+            self._collect_answers(),
+            translate("CADAgent", "submitted"),
+            "done",
+        )
+
+    def _on_skip(self) -> None:
+        if self._decided:
+            return
+        self._finish(
+            self._skipped_answers(),
+            translate("CADAgent", "skipped"),
+            "error",
+        )
+
+    def _finish(self, answers, status_text: str, dot_state: str) -> None:
+        self._decided = True
+        for _q, buttons in self._groups:
+            for b in buttons:
+                b.setEnabled(False)
+        self._submit_btn.setEnabled(False)
+        self._skip_btn.setEnabled(False)
+        self._status.setText(status_text)
+        self._dot.set_state(dot_state)
+        if self._future is not None and not self._future.done():
+            self._future.set_result(answers)
