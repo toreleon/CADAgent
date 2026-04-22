@@ -216,11 +216,19 @@ def open_panel() -> None:
         App.Console.PrintError(f"CAD Agent: {exc}\n")
         return
 
-    use_web = App.ParamGet(
-        "User parameter:BaseApp/Preferences/Mod/CADAgent"
-    ).GetBool("UseWebUI", False)
+    prefs = App.ParamGet("User parameter:BaseApp/Preferences/Mod/CADAgent")
+    use_qml = prefs.GetBool("UseQmlUI", False)
+    use_web = prefs.GetBool("UseWebUI", False)
 
-    if use_web:
+    if use_qml:
+        try:
+            from agent.ui import qml_panel as ChatPanelMod
+        except ImportError as exc:
+            App.Console.PrintError(
+                f"CAD Agent: QML UI unavailable ({exc}); falling back to native panel.\n"
+            )
+            from agent.ui import panel as ChatPanelMod
+    elif use_web:
         try:
             from agent.ui import web_panel as ChatPanelMod
         except ImportError as exc:

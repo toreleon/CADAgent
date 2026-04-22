@@ -13,6 +13,8 @@ import asyncio
 import concurrent.futures
 from dataclasses import dataclass
 
+from . import ui_bridge
+
 
 # Tools that never mutate the document — auto-allow to keep the UX snappy.
 READ_ONLY_TOOLS = {
@@ -52,6 +54,34 @@ def make_can_use_tool(proxy):
     """
 
     async def can_use_tool(tool_name, tool_input, context=None):
+        # AskUserQuestion is a built-in SDK tool. Per the Agent SDK docs, the
+        # client handles it in can_use_tool and returns the user's answers as
+        # `updated_input`; the SDK then feeds those back to the model as the
+        # tool result. See https://code.claude.com/docs/en/agent-sdk/user-input
+        if tool_name == "AskUserQuestion":
+            questions = list((tool_input or {}).get("questions") or [])
+            answer_list = await ui_bridge.ask_user(questions)
+            # The SDK feeds ``answers`` back to the model keyed by the original
+            # question wording. If a question only has a `header` (no
+            # `question` text), fall back to the header — and finally to an
+            # indexed placeholder — so every question maps to a distinct key.
+            # Without this, multiple answers collapse into the empty-string
+            # key and the model re-asks the same questions in plain text.
+            answers: dict[str, str] = {}
+            for idx, (q, ans) in enumerate(zip(questions, answer_list or [])):
+                if not isinstance(ans, dict) or ans.get("skipped"):
+                    continue
+                key = q.get("question") or q.get("header") or f"question_{idx}"
+                sel = ans.get("selected")
+                if isinstance(sel, list):
+                    answers[key] = ", ".join(str(s) for s in sel)
+                elif sel:
+                    answers[key] = str(sel)
+            return {
+                "behavior": "allow",
+                "updatedInput": {"questions": questions, "answers": answers},
+            }
+
         if tool_name in READ_ONLY_TOOLS or is_dry_run(tool_input):
             return {"behavior": "allow", "updatedInput": tool_input}
 

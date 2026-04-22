@@ -10,10 +10,15 @@ FreeCAD's theme shows through. Only the pieces that need a distinct look
 from __future__ import annotations
 
 
-# --- Brand / semantic colors (stay fixed across themes) -----------------
+# --- Brand / semantic colors -------------------------------------------
+#
+# Accent tracks FreeCAD's theme highlight so the panel reads as part of
+# the host app rather than a third-party widget. The semantic OK / WARN /
+# ERR stay fixed — they carry meaning, not branding.
 
-ACCENT      = "#e97b3f"
-ACCENT_DIM  = "#b05e2f"
+ACCENT      = "palette(highlight)"
+ACCENT_FG   = "palette(highlighted-text)"
+ACCENT_DIM  = "palette(highlight)"
 OK          = "#4cb860"
 WARN        = "#d8a84a"
 ERR         = "#e05757"
@@ -56,13 +61,21 @@ BORDER      = "palette(mid)"
 BORDER_SOFT = "palette(midlight)"
 
 # Soft surface tints — render darker on light themes, lighter on dark.
-SURFACE_1   = "rgba(127, 127, 127, 0.10)"   # composer / user bubble
+SURFACE_1   = "rgba(127, 127, 127, 0.10)"   # hover/alt rows, soft chips
 SURFACE_2   = "rgba(127, 127, 127, 0.18)"   # code blocks
 
 BG_ALT      = SURFACE_1
 BG_CODE     = SURFACE_2
-BG_INPUT    = SURFACE_1
+# Composer and inline text inputs use the palette's text-edit surface so
+# they sit flush with FreeCAD's native QLineEdit / QTextEdit fields.
+BG_INPUT    = "palette(base)"
 BG_USER     = SURFACE_1
+
+# FreeCAD inputs and buttons use ~3px corners (see @InputFieldBorderRadius
+# in Gui/Stylesheets/FreeCAD.qss). Containers go slightly softer (4–6px).
+RADIUS_SM   = "3px"
+RADIUS_MD   = "4px"
+RADIUS_LG   = "6px"
 
 MONO_FAMILY = "Menlo, Consolas, 'DejaVu Sans Mono', monospace"
 
@@ -104,15 +117,15 @@ QLabel[role="chip"] {{
     color: {FG_DIM};
     background: {BG_ALT};
     border: 1px solid {BORDER};
-    border-radius: 4px;
+    border-radius: {RADIUS_SM};
     padding: 2px 8px;
     font-size: 11px;
 }}
 QLabel[role="chip_accent"] {{
     color: {ACCENT};
     background: transparent;
-    border: 1px solid {ACCENT_DIM};
-    border-radius: 4px;
+    border: 1px solid {ACCENT};
+    border-radius: {RADIUS_SM};
     padding: 2px 8px;
     font-size: 11px;
 }}
@@ -128,7 +141,7 @@ QTextEdit[role="code"], QLabel[role="code"] {{
     background: {BG_CODE};
     color: {FG};
     border: 1px solid {BORDER_SOFT};
-    border-radius: 4px;
+    border-radius: {RADIUS_SM};
     padding: 6px 10px;
     font-family: {MONO_FAMILY};
     font-size: 11px;
@@ -145,10 +158,10 @@ QTextEdit[role="assistant"] {{
 QFrame#ComposerFrame {{
     background: {BG_INPUT};
     border: 1px solid {BORDER};
-    border-radius: 10px;
+    border-radius: {RADIUS_MD};
 }}
 QFrame#ComposerFrame:focus-within {{
-    border-color: {ACCENT_DIM};
+    border-color: {ACCENT};
 }}
 QPlainTextEdit#ComposerInput {{
     background: transparent;
@@ -172,20 +185,20 @@ QPushButton[role="icon"]:hover, QToolButton[role="icon"]:hover {{
 }}
 QPushButton#SendButton {{
     background: {ACCENT};
-    color: white;
+    color: {ACCENT_FG};
     border: none;
-    border-radius: 12px;
+    border-radius: {RADIUS_MD};
     font-weight: 700;
     font-size: 13px;
 }}
-QPushButton#SendButton:hover   {{ background: #f08a4a; }}
+QPushButton#SendButton:hover   {{ background: {ACCENT}; }}
 QPushButton#SendButton:disabled {{ background: {BG_ALT}; color: {FG_MUTED}; }}
 
 QPushButton#StopButton {{
     background: transparent;
     color: {FG_DIM};
     border: 1px solid {BORDER};
-    border-radius: 12px;
+    border-radius: {RADIUS_MD};
     font-size: 10px;
 }}
 QPushButton#StopButton:hover {{ color: {ERR}; border-color: {ERR}; }}
@@ -204,26 +217,26 @@ QPushButton[role="ghost"] {{
     background: transparent;
     color: {FG_DIM};
     border: 1px solid {BORDER};
-    border-radius: 4px;
+    border-radius: {RADIUS_SM};
     padding: 3px 10px;
 }}
 QPushButton[role="ghost"]:hover {{ color: {FG}; border-color: {FG_MUTED}; }}
 
 QPushButton[role="apply"] {{
-    background: {OK};
-    color: white;
+    background: {ACCENT};
+    color: {ACCENT_FG};
     border: none;
-    border-radius: 4px;
+    border-radius: {RADIUS_SM};
     padding: 4px 12px;
     font-weight: 600;
 }}
-QPushButton[role="apply"]:hover {{ background: #5ec86e; }}
+QPushButton[role="apply"]:hover {{ background: {ACCENT}; }}
 
 QPushButton[role="reject"] {{
     background: transparent;
     color: {FG_DIM};
     border: 1px solid {BORDER};
-    border-radius: 4px;
+    border-radius: {RADIUS_SM};
     padding: 4px 12px;
 }}
 QPushButton[role="reject"]:hover {{ color: {ERR}; border-color: {ERR}; }}
@@ -232,34 +245,34 @@ QPushButton[role="option"] {{
     background: transparent;
     color: {FG};
     border: 1px solid {BORDER};
-    border-radius: 6px;
+    border-radius: {RADIUS_MD};
     padding: 0;
     text-align: left;
 }}
-QPushButton[role="option"]:hover {{ border-color: {ACCENT_DIM}; }}
+QPushButton[role="option"]:hover {{ border-color: {ACCENT}; }}
 QPushButton[role="option"]:checked {{
     border-color: {ACCENT};
     background: {BG_ALT};
 }}
 
 QFrame#HistoryPopup {{
-    background: {BG_ALT};
+    background: palette(window);
     border: 1px solid {BORDER};
-    border-radius: 8px;
+    border-radius: {RADIUS_MD};
 }}
 QLineEdit#HistorySearch {{
     background: {BG_INPUT};
     color: {FG};
     border: 1px solid {BORDER};
-    border-radius: 6px;
+    border-radius: {RADIUS_SM};
     padding: 4px 8px;
     selection-background-color: palette(highlight);
 }}
 QLineEdit#HistorySearch:focus {{ border-color: {ACCENT}; }}
 
-QWidget[role="history_row"] {{ background: transparent; border-radius: 6px; }}
+QWidget[role="history_row"] {{ background: transparent; border-radius: {RADIUS_SM}; }}
 QWidget[role="history_row"]:hover {{ background: {BG_ALT}; }}
-QWidget[role="history_row_active"] {{ background: {BG_ALT}; border-radius: 6px; }}
+QWidget[role="history_row_active"] {{ background: {BG_ALT}; border-radius: {RADIUS_SM}; }}
 QLabel[role="history_title"] {{ color: {FG}; font-size: 12px; }}
 QLabel[role="history_time"]  {{ color: {FG_MUTED}; font-size: 11px; }}
 QLabel[role="history_empty"] {{ color: {FG_MUTED}; font-size: 11px; padding: 16px 8px; }}
@@ -274,7 +287,7 @@ QToolButton[role="row_action"] {{
 QToolButton[role="row_action"]:hover {{ color: {ERR}; }}
 
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 0; }}
-QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: 4px; min-height: 24px; }}
+QScrollBar::handle:vertical {{ background: {BORDER}; border-radius: {RADIUS_SM}; min-height: 24px; }}
 QScrollBar::handle:vertical:hover {{ background: {FG_MUTED}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 """
@@ -283,3 +296,23 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 def build_panel_qss() -> str:
     """Return PANEL_QSS with FG resolved to pure white/black for the current theme."""
     return PANEL_QSS.replace("palette(text)", _resolve_fg())
+
+
+def accent_hex() -> str:
+    """Resolve the theme highlight color to a hex string.
+
+    Qt stylesheets can reference ``palette(highlight)`` directly, but QPainter
+    and QTextDocument CSS cannot — they need a concrete color. This is the
+    escape hatch for those two call sites.
+    """
+    try:
+        from PySide import QtGui, QtWidgets  # type: ignore
+    except ImportError:
+        try:
+            from PySide6 import QtGui, QtWidgets  # type: ignore
+        except ImportError:
+            from PySide2 import QtGui, QtWidgets  # type: ignore
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return "#3c6ea5"
+    return app.palette().color(QtGui.QPalette.Highlight).name()

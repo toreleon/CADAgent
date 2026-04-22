@@ -23,7 +23,6 @@ except ImportError:
 from ..permissions import Decision
 from .styles import (
     ACCENT,
-    ACCENT_DIM,
     BG_CODE,
     BG_USER,
     BORDER_SOFT,
@@ -33,6 +32,7 @@ from .styles import (
     FG_MUTED,
     MONO_FAMILY,
     OK,
+    accent_hex,
 )
 
 
@@ -121,8 +121,8 @@ class StatusDot(QtWidgets.QLabel):
     """Tiny circle used in the left gutter: filled when done, ring when idle."""
 
     STATES = {
-        "pending": (None, False),  # None → use palette Mid at paint time
-        "active":  (ACCENT, True),
+        "pending": (None, False),      # None → use palette Mid at paint time
+        "active":  ("__accent__", True),  # sentinel → resolved to palette highlight
         "done":    (OK, True),
         "error":   (ERR, True),
     }
@@ -137,6 +137,8 @@ class StatusDot(QtWidgets.QLabel):
         color, filled = self.STATES.get(state, self.STATES["pending"])
         if color is None:
             color = _palette_mid()
+        elif color == "__accent__":
+            color = accent_hex()
         pm = QtGui.QPixmap(14, 14)
         pm.fill(QtCore.Qt.transparent)
         p = QtGui.QPainter(pm)
@@ -219,7 +221,7 @@ class _AssistantRow(QtWidgets.QWidget):
             f"pre {{ padding: 6px 8px; }}"
             f"code {{ padding: 0 3px; }}"
             f"h1, h2, h3 {{ color: {fg}; }}"
-            f"a {{ color: {ACCENT}; }}"
+            f"a {{ color: {accent_hex()}; }}"
             f"ul, ol {{ margin-left: 16px; }}"
         )
 

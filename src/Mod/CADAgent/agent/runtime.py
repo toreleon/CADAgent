@@ -240,7 +240,10 @@ class AgentRuntime:
             model=model,
             system_prompt=CAD_SYSTEM_PROMPT,
             mcp_servers={"cad": server},
-            allowed_tools=cad_tools.allowed_tool_names(),
+            # "AskUserQuestion" is a built-in SDK tool handled client-side
+            # in can_use_tool (see permissions.py); include it explicitly so
+            # the allow-list doesn't accidentally block it.
+            allowed_tools=cad_tools.allowed_tool_names() + ["AskUserQuestion"],
             can_use_tool=make_can_use_tool(self._proxy),
             permission_mode=_resolve_permission_mode(),
             include_partial_messages=True,

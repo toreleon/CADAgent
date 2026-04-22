@@ -29,10 +29,15 @@ SET(CADAgent_UI
     agent/ui/__init__.py
     agent/ui/panel.py
     agent/ui/web_panel.py
+    agent/ui/qml_panel.py
     agent/ui/widgets.py
     agent/ui/composer.py
     agent/ui/history_popup.py
     agent/ui/styles.py
+)
+
+SET(CADAgent_UI_QML
+    agent/ui/qml/ChatPanel.qml
 )
 
 SET(CADAgent_TOOLS
@@ -71,6 +76,7 @@ SET(CADAgent_SRCS
     ${CADAgent_TOP}
     ${CADAgent_AGENT}
     ${CADAgent_UI}
+    ${CADAgent_UI_QML}
     ${CADAgent_TOOLS}
     ${CADAgent_TOOLS_PARTDESIGN}
     ${CADAgent_TOOLS_MACROS}
@@ -93,6 +99,7 @@ ENDIF (BUILD_GUI)
 INSTALL(FILES ${CADAgent_TOP} ${CADAgent_QRC_SRCS} DESTINATION Mod/CADAgent)
 INSTALL(FILES ${CADAgent_AGENT} DESTINATION Mod/CADAgent/agent)
 INSTALL(FILES ${CADAgent_UI} DESTINATION Mod/CADAgent/agent/ui)
+INSTALL(FILES ${CADAgent_UI_QML} DESTINATION Mod/CADAgent/agent/ui/qml)
 INSTALL(FILES ${CADAgent_TOOLS} DESTINATION Mod/CADAgent/agent/tools)
 INSTALL(FILES ${CADAgent_TOOLS_PARTDESIGN} DESTINATION Mod/CADAgent/agent/tools/partdesign)
 INSTALL(FILES ${CADAgent_TOOLS_MACROS} DESTINATION Mod/CADAgent/agent/tools/macros)
