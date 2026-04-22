@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Dockable QML-based chat panel.
+"""Dockable QML-based chat panel — the sole CAD Agent UI.
 
-Mirrors the public API of :class:`~agent.ui.panel.ChatPanel` so ``AgentRuntime``
-can drive either panel interchangeably. The UI itself is declared in
-``qml/ChatPanel.qml`` and talks to two Python context objects:
+The UI itself is declared in ``qml/ChatPanel.qml`` and talks to two Python
+context objects:
 
 * ``messages`` — a :class:`MessagesModel` (``QAbstractListModel``) holding one
   row per chat entry. Roles: ``kind``, ``text``, ``meta``.

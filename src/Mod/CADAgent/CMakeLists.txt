@@ -14,7 +14,6 @@ SET(CADAgent_TOP
 SET(CADAgent_AGENT
     agent/__init__.py
     agent/runtime.py
-    agent/bridge.py
     agent/context.py
     agent/errors.py
     agent/gui_thread.py
@@ -27,13 +26,7 @@ SET(CADAgent_AGENT
 
 SET(CADAgent_UI
     agent/ui/__init__.py
-    agent/ui/panel.py
-    agent/ui/web_panel.py
     agent/ui/qml_panel.py
-    agent/ui/widgets.py
-    agent/ui/composer.py
-    agent/ui/history_popup.py
-    agent/ui/styles.py
 )
 
 SET(CADAgent_UI_QML
@@ -67,11 +60,6 @@ SET(CADAgent_TOOLS_MACROS
     agent/tools/macros/holes.py
 )
 
-SET(CADAgent_WEB
-    Resources/web/index.html
-    Resources/web/README.md
-)
-
 SET(CADAgent_SRCS
     ${CADAgent_TOP}
     ${CADAgent_AGENT}
@@ -80,7 +68,6 @@ SET(CADAgent_SRCS
     ${CADAgent_TOOLS}
     ${CADAgent_TOOLS_PARTDESIGN}
     ${CADAgent_TOOLS_MACROS}
-    ${CADAgent_WEB}
 )
 
 SOURCE_GROUP("" FILES ${CADAgent_SRCS})
@@ -103,4 +90,3 @@ INSTALL(FILES ${CADAgent_UI_QML} DESTINATION Mod/CADAgent/agent/ui/qml)
 INSTALL(FILES ${CADAgent_TOOLS} DESTINATION Mod/CADAgent/agent/tools)
 INSTALL(FILES ${CADAgent_TOOLS_PARTDESIGN} DESTINATION Mod/CADAgent/agent/tools/partdesign)
 INSTALL(FILES ${CADAgent_TOOLS_MACROS} DESTINATION Mod/CADAgent/agent/tools/macros)
-INSTALL(FILES ${CADAgent_WEB} DESTINATION Mod/CADAgent/Resources/web)
