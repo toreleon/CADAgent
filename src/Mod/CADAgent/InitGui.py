@@ -112,24 +112,6 @@ def _install_agent_toolbar():
     act.triggered.connect(_toggle)
     tb.addAction(act)
 
-    def _configure():
-        try:
-            import CADAgent
-            CADAgent.register_commands()
-            FreeCADGui.runCommand("CADAgent_ConfigureLLM")
-        except Exception as exc:
-            FreeCAD.Console.PrintError(
-                f"CAD Agent: configure failed: {exc}\n{traceback.format_exc()}\n"
-            )
-
-    cfg_act = QtGui.QAction(translate("CADAgent", "Configure LLM…"), mw)
-    cfg_act.setObjectName("CADAgent_ConfigureLLMAction")
-    cfg_act.setToolTip(
-        translate("CADAgent", "Set the LiteLLM proxy URL, key, and model")
-    )
-    cfg_act.triggered.connect(_configure)
-    tb.addAction(cfg_act)
-
     tb.setToolButtonStyle(_QtCore.Qt.ToolButtonTextBesideIcon)
     mw.addToolBar(_QtCore.Qt.TopToolBarArea, tb)
 
