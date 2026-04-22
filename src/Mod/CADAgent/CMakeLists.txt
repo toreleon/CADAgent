@@ -8,6 +8,7 @@ SET(CADAgent_TOP
     Init.py
     InitGui.py
     CADAgent.py
+    cli.py
     dlgPreferencesCADAgent.ui
 )
 
