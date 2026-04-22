@@ -311,7 +311,7 @@ Rectangle {
                 anchors.leftMargin: gutter
                 anchors.rightMargin: 12
                 y: rowPadY + 2
-                text: rowModel.text
+                text: rowModel ? rowModel.text : ""
                 color: fg
                 wrapMode: Text.Wrap
                 font.pixelSize: fontMd
@@ -340,7 +340,7 @@ Rectangle {
                 anchors.leftMargin: gutter
                 anchors.rightMargin: 12
                 y: rowPadY + 2
-                text: rowModel.text
+                text: rowModel ? rowModel.text : ""
                 color: fg
                 wrapMode: Text.Wrap
                 textFormat: Text.MarkdownText
@@ -370,7 +370,7 @@ Rectangle {
                 anchors.leftMargin: gutter
                 anchors.rightMargin: 12
                 y: rowPadY
-                text: rowModel.text
+                text: rowModel ? rowModel.text : ""
                 color: fgDim
                 wrapMode: Text.Wrap
                 font.italic: true
@@ -392,7 +392,7 @@ Rectangle {
                 anchors.leftMargin: gutter
                 anchors.rightMargin: 12
                 y: rowPadY
-                text: rowModel.text
+                text: rowModel ? rowModel.text : ""
                 color: fgDim
                 wrapMode: Text.Wrap
                 font.pixelSize: fontSm
@@ -422,7 +422,7 @@ Rectangle {
                 anchors.leftMargin: gutter
                 anchors.rightMargin: 12
                 y: rowPadY + 1
-                text: rowModel.text
+                text: rowModel ? rowModel.text : ""
                 color: errColor
                 wrapMode: Text.Wrap
                 font.pixelSize: fontMd
@@ -440,7 +440,7 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
-                text: rowModel.text
+                text: rowModel ? rowModel.text : ""
                 color: fgMuted
                 font.pixelSize: 10
                 font.family: monoFamily
@@ -459,8 +459,8 @@ Rectangle {
                 x: 6
                 y: rowPadY + 2
                 text: "⏺"
-                color: rowModel.meta && rowModel.meta.isError ? errColor
-                       : (rowModel.meta && rowModel.meta.status === "OK" ? okColor : accent)
+                color: rowModel && rowModel.meta && rowModel.meta.isError ? errColor
+                       : (rowModel && rowModel.meta && rowModel.meta.status === "OK" ? okColor : accent)
                 font.pixelSize: fontMd
             }
 
@@ -477,8 +477,8 @@ Rectangle {
                 Text {
                     width: parent.width
                     text: {
-                        var n = rowModel.text
-                        var inp = rowModel.meta && rowModel.meta.inputPreview
+                        var n = rowModel ? rowModel.text : ""
+                        var inp = rowModel && rowModel.meta && rowModel.meta.inputPreview
                                   ? rowModel.meta.inputPreview : ""
                         if (inp.length === 0) return n + "()"
                         // Single-line inputs → inline; multi-line → name(…)
@@ -494,7 +494,7 @@ Rectangle {
 
                 // Multi-line input (indented, tree corner)
                 Row {
-                    visible: rowModel.meta && rowModel.meta.inputPreview
+                    visible: rowModel && rowModel.meta && rowModel.meta.inputPreview
                              && rowModel.meta.inputPreview.indexOf("\n") >= 0
                     spacing: 6
                     Text {
@@ -505,7 +505,7 @@ Rectangle {
                     }
                     Text {
                         width: toolCol.width - 20
-                        text: (rowModel.meta && rowModel.meta.inputPreview) || ""
+                        text: (rowModel && rowModel.meta && rowModel.meta.inputPreview) || ""
                         color: fgDim
                         wrapMode: Text.Wrap
                         font.pixelSize: fontSm
@@ -515,7 +515,7 @@ Rectangle {
 
                 // Result (tree corner + preview)
                 Row {
-                    visible: rowModel.meta && rowModel.meta.resultPreview
+                    visible: rowModel && rowModel.meta && rowModel.meta.resultPreview
                     spacing: 6
                     Text {
                         text: "⎿"
@@ -525,8 +525,8 @@ Rectangle {
                     }
                     Text {
                         width: toolCol.width - 20
-                        text: (rowModel.meta && rowModel.meta.resultPreview) || ""
-                        color: rowModel.meta && rowModel.meta.isError ? errColor : fg
+                        text: (rowModel && rowModel.meta && rowModel.meta.resultPreview) || ""
+                        color: rowModel && rowModel.meta && rowModel.meta.isError ? errColor : fg
                         wrapMode: Text.Wrap
                         font.pixelSize: fontSm
                         font.family: monoFamily
@@ -535,7 +535,7 @@ Rectangle {
 
                 // "running…" placeholder until a result arrives.
                 Row {
-                    visible: rowModel.meta
+                    visible: rowModel && rowModel.meta
                              && !rowModel.meta.resultPreview
                              && rowModel.meta.status === "…"
                     spacing: 6
@@ -567,7 +567,7 @@ Rectangle {
                 x: 6
                 y: rowPadY + 2
                 text: "⏺"
-                color: rowModel.meta && rowModel.meta.pending ? accent : fgMuted
+                color: rowModel && rowModel.meta && rowModel.meta.pending ? accent : fgMuted
                 font.pixelSize: fontMd
             }
 
@@ -583,8 +583,8 @@ Rectangle {
                 Text {
                     width: parent.width
                     text: {
-                        var n = rowModel.text
-                        var inp = rowModel.meta && rowModel.meta.inputPreview
+                        var n = rowModel ? rowModel.text : ""
+                        var inp = rowModel && rowModel.meta && rowModel.meta.inputPreview
                                   ? rowModel.meta.inputPreview : ""
                         if (inp.length === 0) return n + "()"
                         return inp.indexOf("\n") < 0
@@ -599,7 +599,7 @@ Rectangle {
 
                 // Multi-line input (tree corner)
                 Row {
-                    visible: rowModel.meta && rowModel.meta.inputPreview
+                    visible: rowModel && rowModel.meta && rowModel.meta.inputPreview
                              && rowModel.meta.inputPreview.indexOf("\n") >= 0
                     spacing: 6
                     Text {
@@ -610,7 +610,7 @@ Rectangle {
                     }
                     Text {
                         width: permCol.width - 20
-                        text: (rowModel.meta && rowModel.meta.inputPreview) || ""
+                        text: (rowModel && rowModel.meta && rowModel.meta.inputPreview) || ""
                         color: fgDim
                         wrapMode: Text.Wrap
                         font.pixelSize: fontSm
@@ -620,7 +620,7 @@ Rectangle {
 
                 // Action row — inline plain-text buttons, no frames.
                 Row {
-                    visible: rowModel.meta && rowModel.meta.pending
+                    visible: rowModel && rowModel.meta && rowModel.meta.pending
                     spacing: 12
                     topPadding: 2
 
@@ -665,7 +665,7 @@ Rectangle {
 
                 // Resolved state — shows the decision, greyed.
                 Row {
-                    visible: rowModel.meta && !rowModel.meta.pending
+                    visible: rowModel && rowModel.meta && !rowModel.meta.pending
                     spacing: 6
                     Text {
                         text: "⎿"
@@ -674,7 +674,7 @@ Rectangle {
                         font.family: monoFamily
                     }
                     Text {
-                        text: (rowModel.meta && rowModel.meta.decision) || ""
+                        text: (rowModel && rowModel.meta && rowModel.meta.decision) || ""
                         color: fgMuted
                         font.italic: true
                         font.pixelSize: fontSm
@@ -697,7 +697,7 @@ Rectangle {
             property var selections: []
 
             function initSelections() {
-                var qs = (rowModel && rowModel.meta && rowModel.meta.questions) || []
+                var qs = (rowModel && rowModel && rowModel.meta && rowModel.meta.questions) || []
                 var out = []
                 for (var i = 0; i < qs.length; ++i)
                     out.push(qs[i].multiSelect ? [] : -1)
@@ -778,7 +778,7 @@ Rectangle {
                 x: 6
                 y: rowPadY + 2
                 text: "⏺"
-                color: rowModel && rowModel.meta && rowModel.meta.pending
+                color: rowModel && rowModel && rowModel.meta && rowModel.meta.pending
                        ? accent : fgMuted
                 font.pixelSize: fontMd
             }
@@ -830,9 +830,11 @@ Rectangle {
                                 width: parent.width
                                 height: optRow.implicitHeight + 4
                                 hoverEnabled: true
-                                cursorShape: askRoot.rowModel.meta.pending
+                                cursorShape: askRoot.rowModel && askRoot.rowModel.meta
+                                             && askRoot.rowModel.meta.pending
                                              ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                onClicked: if (askRoot.rowModel.meta.pending)
+                                onClicked: if (askRoot.rowModel && askRoot.rowModel.meta
+                                               && askRoot.rowModel.meta.pending)
                                     askRoot.toggle(questionIndex, index, q.multiSelect || false)
 
                                 property int optionIndex: index
