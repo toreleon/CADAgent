@@ -26,7 +26,7 @@ from __future__ import annotations
 from claude_agent_sdk import AgentDefinition
 
 from . import tools as cad_tools
-from .prompts import REVIEWER_PROMPT
+from .prompts import REVIEWER_PROMPT, SKETCHER_PROMPT
 
 
 # Read-only tools the Reviewer may use. Enumerated by name so the SDK's
@@ -67,6 +67,31 @@ def reviewer_tool_names() -> list[str]:
     return _as_mcp_names(_REVIEWER_READONLY_NAMES)
 
 
+# Tools the Sketcher may use. Sketch creation + constraint solving, plus
+# the read-only tools it needs to reason about the active Body and surface.
+_SKETCHER_TOOL_NAMES: tuple[str, ...] = (
+    # sketch creation + editing
+    "create_sketch",
+    "add_sketch_geometry",
+    "add_sketch_constraint",
+    "close_sketch",
+    "sketch_from_profile",
+    # verification (closes its own loop)
+    "verify_sketch",
+    # read helpers so it can pick a plane / face
+    "list_objects",
+    "get_object",
+    "get_selection",
+    "get_active_document",
+    "read_project_memory",
+)
+
+
+def sketcher_tool_names() -> list[str]:
+    """Full tool names granted to the Sketcher subagent."""
+    return _as_mcp_names(_SKETCHER_TOOL_NAMES)
+
+
 def reviewer_agent() -> AgentDefinition:
     """Build the Reviewer AgentDefinition from the live tool registry.
 
@@ -86,11 +111,35 @@ def reviewer_agent() -> AgentDefinition:
     )
 
 
+def sketcher_agent() -> AgentDefinition:
+    """Build the Sketcher AgentDefinition from the live tool registry.
+
+    The orchestrator delegates to this specialist when a milestone's
+    tool_hints include sketch creation / constraint solving, or whenever the
+    main agent hits a DoF>0 wall. The Sketcher closes its own loop —
+    iterating ``add_sketch_constraint`` + ``verify_sketch`` until DoF=0 —
+    and returns control with a single result message.
+    """
+    return AgentDefinition(
+        description=(
+            "2D sketch specialist. Creates and constrains sketches inside "
+            "the active PartDesign Body until DoF=0. Use this agent when a "
+            "milestone involves sketch_from_profile / add_sketch_constraint "
+            "loops or when a sketch-based feature fails due to an "
+            "underconstrained profile."
+        ),
+        prompt=SKETCHER_PROMPT,
+        tools=sketcher_tool_names(),
+        permissionMode="default",
+    )
+
+
 def build_subagents() -> dict[str, AgentDefinition]:
     """Return the full subagent map to wire into ClaudeAgentOptions.agents.
 
-    New specialists (Sketcher in Phase 6, Assembler later) plug in here.
+    New specialists (Assembler in a later phase) plug in here.
     """
     return {
         "reviewer": reviewer_agent(),
+        "sketcher": sketcher_agent(),
     }
