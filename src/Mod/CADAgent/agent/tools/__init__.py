@@ -11,11 +11,11 @@ run and the tool registry is populated before the server is built.
 
 from __future__ import annotations
 
-from . import doc, selection, geometry, memory, diagnostics, partdesign, macros
+from . import doc, selection, geometry, memory, diagnostics, partdesign, macros, planning
 from ._shared import mark_tool, get_last_result_summary
 
 
-_MODULES = (doc, selection, geometry, memory, diagnostics, partdesign, macros)
+_MODULES = (doc, selection, geometry, memory, diagnostics, partdesign, macros, planning)
 
 
 def tool_funcs() -> list:

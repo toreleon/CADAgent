@@ -207,6 +207,49 @@ def _units_scheme() -> str:
         return "mm (assumed)"
 
 
+def _format_decision(d: dict) -> str:
+    """Render one typed decision record compactly for the context snapshot."""
+    ts = d.get("ts", "")
+    head = f"  - [{ts}] {d.get('id','?')}"
+    goal = (d.get("goal") or "").strip()
+    choice = (d.get("choice") or "").strip()
+    rationale = (d.get("rationale") or d.get("text") or "").strip()
+    constraints = d.get("constraints") or []
+    depends_on = d.get("depends_on") or []
+    bits: list[str] = []
+    if goal:
+        bits.append(f"goal={goal!r}")
+    if choice:
+        bits.append(f"chose={choice!r}")
+    if rationale and rationale != choice:
+        bits.append(f"because {rationale}")
+    if constraints:
+        bits.append(f"constraints={constraints}")
+    if depends_on:
+        bits.append(f"depends_on={depends_on}")
+    if not bits:
+        return head
+    return head + " " + " ".join(bits)
+
+
+def _select_relevant_decisions(doc, plan, decisions: list[dict], tail_limit: int = 3) -> list[dict]:
+    """Choose which decisions to surface in the per-turn context.
+
+    Uses the milestone closure when we have a plan AND at least one decision
+    tagged with a milestone id, so a long session's context stays focused on
+    what matters for the *current* step. Falls back to the tail when there's
+    no plan to key off.
+    """
+    active = project_memory.active_milestone(doc) if plan else None
+    if active:
+        seeds = [d.get("id") for d in decisions if d.get("milestone") == active.get("id")]
+        if seeds:
+            closure = project_memory.decision_closure(doc, [s for s in seeds if s])
+            if closure:
+                return closure
+    return decisions[-tail_limit:]
+
+
 def _global_memory_text() -> str:
     candidates = []
     env = os.environ.get("CLAUDE_PROJECT_DIR")
@@ -289,6 +332,7 @@ def _build_snapshot_sync() -> str:
             intent = (mem.get("design_intent") or "").strip()
             params = mem.get("parameters") or {}
             decisions = mem.get("decisions") or []
+            plan = mem.get("plan")
             lines = []
             if intent:
                 lines.append(f"- Intent: {intent}")
@@ -300,10 +344,34 @@ def _build_snapshot_sync() -> str:
                     note = spec.get("note", "")
                     suffix = f" — {note}" if note else ""
                     lines.append(f"  - {name} = {v} {u}{suffix}")
+
+            # Plan: render the milestone strip when one exists so the agent
+            # sees where it is in the overall design sequence.
+            if plan and (plan.get("milestones") or []):
+                lines.append(f"- Plan {plan.get('id','')} ({plan.get('status','?')}):")
+                for m in plan["milestones"]:
+                    marker = {"pending": " ", "active": "*", "done": "✓", "failed": "✗"}.get(
+                        m.get("status", "pending"), "?"
+                    )
+                    lines.append(
+                        f"  [{marker}] {m.get('id','?')} {m.get('title','')}"
+                    )
+
+            # Decisions: when a milestone is active, show only decisions linked
+            # to it plus the transitive depends_on closure. Otherwise fall back
+            # to the most recent 3 entries.
             if decisions:
-                lines.append(f"- Decisions ({len(decisions)} total, last 3):")
-                for d in decisions[-3:]:
-                    lines.append(f"  - [{d.get('ts','')}] {d.get('text','')}")
+                rendered = _select_relevant_decisions(doc, plan, decisions)
+                if rendered:
+                    header_suffix = (
+                        "filtered by active milestone"
+                        if project_memory.active_milestone(doc)
+                        and any(d.get("milestone") for d in decisions)
+                        else f"last {len(rendered)} of {len(decisions)}"
+                    )
+                    lines.append(f"- Decisions ({header_suffix}):")
+                    for d in rendered:
+                        lines.append(_format_decision(d))
             if lines:
                 parts.append("## Project memory\n" + "\n".join(lines))
         except Exception as exc:

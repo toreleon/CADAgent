@@ -42,6 +42,7 @@ SET(CADAgent_TOOLS
     agent/tools/geometry.py
     agent/tools/memory.py
     agent/tools/diagnostics.py
+    agent/tools/planning.py
     agent/tools/profiles.py
 )
 
