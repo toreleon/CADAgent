@@ -34,13 +34,15 @@ except ImportError:
     except ImportError:
         from PySide2 import QtCore, QtGui, QtWidgets
 
-# QQuickWidget lives in QtQuickWidgets; on FreeCAD's PySide shim it isn't
-# re-exported, so import explicitly from the underlying binding.
+# QQuickView is a QWindow subclass — wrap it in createWindowContainer() so
+# it can live inside a dock widget while managing its own graphics context.
+# This avoids the QQuickWidget "graphics API mismatch" error that occurs when
+# the top-level FreeCAD window uses a different backend (e.g. Metal on macOS).
 try:
-    from PySide6.QtQuickWidgets import QQuickWidget
+    from PySide6.QtQuick import QQuickView
     from PySide6.QtQml import QQmlContext  # noqa: F401
 except ImportError:  # pragma: no cover - PySide2 fallback
-    from PySide2.QtQuickWidgets import QQuickWidget
+    from PySide2.QtQuick import QQuickView
     from PySide2.QtQml import QQmlContext  # noqa: F401
 
 from .. import sessions as cad_sessions
@@ -446,8 +448,8 @@ class QmlChatPanel(QtWidgets.QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        self.view = QQuickWidget(self)
-        self.view.setResizeMode(QQuickWidget.SizeRootObjectToView)
+        self.view = QQuickView()
+        self.view.setResizeMode(QQuickView.SizeRootObjectToView)
         ctx = self.view.rootContext()
         ctx.setContextProperty("bridge", self.bridge)
         ctx.setContextProperty("messages", self.model)
@@ -465,7 +467,13 @@ class QmlChatPanel(QtWidgets.QWidget):
             lay.addWidget(label)
         else:
             self.view.setSource(QtCore.QUrl.fromLocalFile(_QML_MAIN))
-            lay.addWidget(self.view)
+            container = QtWidgets.QWidget.createWindowContainer(self.view, self)
+            container.setMinimumSize(200, 100)
+            container.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding,
+                QtWidgets.QSizePolicy.Expanding,
+            )
+            lay.addWidget(container)
 
         self.model.add_system(
             translate("CADAgent", "CAD Agent ready. Ask me to model something.")

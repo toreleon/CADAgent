@@ -13,6 +13,8 @@ import asyncio
 import concurrent.futures
 from dataclasses import dataclass
 
+from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+
 from . import ui_bridge
 
 
@@ -77,22 +79,18 @@ def make_can_use_tool(proxy):
                     answers[key] = ", ".join(str(s) for s in sel)
                 elif sel:
                     answers[key] = str(sel)
-            return {
-                "behavior": "allow",
-                "updatedInput": {"questions": questions, "answers": answers},
-            }
+            return PermissionResultAllow(
+                updated_input={"questions": questions, "answers": answers}
+            )
 
         if tool_name in READ_ONLY_TOOLS or is_dry_run(tool_input):
-            return {"behavior": "allow", "updatedInput": tool_input}
+            return PermissionResultAllow(updated_input=tool_input)
 
         cf: concurrent.futures.Future = concurrent.futures.Future()
         proxy.permissionRequest.emit(tool_name, tool_input, cf)
         decision = await asyncio.wrap_future(cf)
         if decision.allowed:
-            return {"behavior": "allow", "updatedInput": tool_input}
-        return {
-            "behavior": "deny",
-            "message": decision.reason or "User rejected this action.",
-        }
+            return PermissionResultAllow(updated_input=tool_input)
+        return PermissionResultDeny(message=decision.reason or "User rejected this action.")
 
     return can_use_tool

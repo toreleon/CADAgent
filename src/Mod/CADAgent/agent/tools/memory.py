@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Project-memory and named-parameter MCP tools.
+"""Project-memory and named-parameter custom tools.
 
 Exposes the JSON sidecar via read/write tools, plus `set_parameter` which
 mirrors the value into a FreeCAD Parameters spreadsheet so feature properties
@@ -13,6 +13,9 @@ import traceback
 import FreeCAD as App
 
 from claude_agent_sdk import tool
+from mcp.types import ToolAnnotations
+
+_READ_ONLY = ToolAnnotations(readOnlyHint=True)
 
 from .. import memory as project_memory
 from ..gui_thread import run_sync
@@ -66,6 +69,7 @@ def sync_parameter_to_sheet(doc, name: str, value: float, unit: str) -> None:
     "read_project_memory",
     "Return the project memory sidecar (design intent, parameters, decisions).",
     {"doc": str},
+    annotations=_READ_ONLY,
 )
 async def read_project_memory(args):
     def _do():
@@ -82,6 +86,7 @@ async def read_project_memory(args):
     "get_parameters",
     "Return the named parameters stored in project memory.",
     {"doc": str},
+    annotations=_READ_ONLY,
 )
 async def get_parameters(args):
     def _do():
@@ -180,5 +185,3 @@ TOOL_NAMES = [
 ]
 
 
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

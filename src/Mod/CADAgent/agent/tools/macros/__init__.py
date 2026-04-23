@@ -15,5 +15,3 @@ TOOL_FUNCS = plate.TOOL_FUNCS + holes.TOOL_FUNCS
 TOOL_NAMES = plate.TOOL_NAMES + holes.TOOL_NAMES
 
 
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

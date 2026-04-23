@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Selection, placement, and object-lifecycle MCP tools."""
+"""Selection, placement, and object-lifecycle custom tools."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ except ImportError:
     _HAS_GUI = False
 
 from claude_agent_sdk import tool
+from mcp.types import ToolAnnotations
+
+_READ_ONLY = ToolAnnotations(readOnlyHint=True)
 
 from ._shared import (
     ok,
@@ -26,7 +29,7 @@ from ._shared import (
 )
 
 
-@tool("get_selection", "Return names of objects currently selected in the GUI.", {})
+@tool("get_selection", "Return names of objects currently selected in the GUI.", {}, annotations=_READ_ONLY)
 async def get_selection(args):
     def work():
         if not _HAS_GUI:
@@ -129,5 +132,3 @@ TOOL_FUNCS = [get_selection, set_placement, delete_object]
 TOOL_NAMES = ["get_selection", "set_placement", "delete_object"]
 
 
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

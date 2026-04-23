@@ -337,6 +337,3 @@ async def make_parametric_plate(args):
 TOOL_FUNCS = [make_parametric_box, make_parametric_cylinder, make_parametric_plate]
 TOOL_NAMES = ["make_parametric_box", "make_parametric_cylinder", "make_parametric_plate"]
 
-
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

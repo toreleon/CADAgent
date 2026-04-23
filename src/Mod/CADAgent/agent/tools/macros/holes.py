@@ -131,6 +131,3 @@ async def add_corner_holes(args):
 TOOL_FUNCS = [add_corner_holes]
 TOOL_NAMES = ["add_corner_holes"]
 
-
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

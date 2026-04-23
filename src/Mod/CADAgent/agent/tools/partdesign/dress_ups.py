@@ -106,6 +106,3 @@ async def chamfer(args):
 TOOL_FUNCS = [fillet, chamfer]
 TOOL_NAMES = ["fillet", "chamfer"]
 
-
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

@@ -72,6 +72,7 @@ try:
         ThinkingBlock,
         ToolResultBlock,
         ToolUseBlock,
+        create_sdk_mcp_server,
     )
 finally:
     sys.stderr = _saved_stderr
@@ -235,7 +236,7 @@ class AgentRuntime:
         # model so every request routes to something the proxy recognises.
         os.environ["ANTHROPIC_MODEL"] = model
         os.environ["ANTHROPIC_SMALL_FAST_MODEL"] = model
-        server = cad_tools.build_mcp_server()
+        server = create_sdk_mcp_server(name="cad", tools=cad_tools.tool_funcs())
         options = ClaudeAgentOptions(
             model=model,
             system_prompt=CAD_SYSTEM_PROMPT,
