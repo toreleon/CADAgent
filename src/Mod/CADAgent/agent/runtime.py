@@ -73,6 +73,7 @@ from claude_agent_sdk import (
 
 from . import hooks as cad_hooks
 from . import sessions as cad_sessions
+from . import subagents as cad_subagents
 from . import tools as cad_tools
 from . import ui_bridge
 from .context import wrap_user_message
@@ -246,14 +247,18 @@ class AgentRuntime:
         subagent_stop_matchers = [
             HookMatcher(matcher=None, hooks=[cad_hooks.on_subagent_stop]),
         ]
+        # "AskUserQuestion" is a built-in SDK tool handled client-side
+        # in can_use_tool (see permissions.py); include it explicitly so
+        # the allow-list doesn't accidentally block it.
+        # "Agent" is the SDK's built-in delegation tool the orchestrator
+        # uses to invoke specialist subagents (reviewer, sketcher, …).
+        allowed = cad_tools.allowed_tool_names() + ["AskUserQuestion", "Agent"]
         options = ClaudeAgentOptions(
             model=model,
             system_prompt=CAD_SYSTEM_PROMPT,
             mcp_servers={"cad": server},
-            # "AskUserQuestion" is a built-in SDK tool handled client-side
-            # in can_use_tool (see permissions.py); include it explicitly so
-            # the allow-list doesn't accidentally block it.
-            allowed_tools=cad_tools.allowed_tool_names() + ["AskUserQuestion"],
+            allowed_tools=allowed,
+            agents=cad_subagents.build_subagents(),
             can_use_tool=make_can_use_tool(self._proxy),
             hooks={
                 "PreToolUse": cad_hook_matchers,
