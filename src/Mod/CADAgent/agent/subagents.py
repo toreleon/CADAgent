@@ -111,6 +111,28 @@ def reviewer_agent() -> AgentDefinition:
     )
 
 
+def assembler_agent() -> AgentDefinition | None:
+    """Stub for the future Assembler specialist — Phase 8 placeholder.
+
+    Assembly support needs a tool surface that doesn't exist yet: joints,
+    constraints between bodies, cross-body parametric references. Until
+    those tools land, this factory returns ``None`` so ``build_subagents()``
+    skips it cleanly. The shape is left here so the next contributor can
+    drop in the real implementation without re-wiring the orchestrator.
+
+    When building the real definition, expected tool allow-list:
+
+        "create_assembly_constraint", "set_joint", "reference_part",
+        "set_placement", "list_objects", "get_object", "verify_feature",
+        "get_selection", "get_active_document", "read_project_memory"
+
+    and the description should warn the orchestrator that the Assembler
+    mutates inter-body relationships — call it only from milestones whose
+    tool_hints explicitly mention assembly.
+    """
+    return None
+
+
 def sketcher_agent() -> AgentDefinition:
     """Build the Sketcher AgentDefinition from the live tool registry.
 
@@ -137,9 +159,13 @@ def sketcher_agent() -> AgentDefinition:
 def build_subagents() -> dict[str, AgentDefinition]:
     """Return the full subagent map to wire into ClaudeAgentOptions.agents.
 
-    New specialists (Assembler in a later phase) plug in here.
+    New specialists plug in here. assembler_agent() is a placeholder that
+    returns None until the assembly tool surface is built — filtered out
+    below so the map only contains real definitions.
     """
-    return {
+    all_specialists = {
         "reviewer": reviewer_agent(),
         "sketcher": sketcher_agent(),
+        "assembler": assembler_agent(),
     }
+    return {name: agent for name, agent in all_specialists.items() if agent is not None}

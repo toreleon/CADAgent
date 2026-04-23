@@ -23,7 +23,10 @@ What each hook does:
 
 from __future__ import annotations
 
+import datetime
 import json
+import os
+import shutil
 import sys
 from typing import Any
 
@@ -252,4 +255,60 @@ async def on_subagent_stop(input_data: dict, tool_use_id: str | None, context) -
         f"[cadagent hooks] subagent stop: type={agent_type} id={agent_id}\n"
     )
     sys.stderr.flush()
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# PreCompact — archive transcripts before the SDK summarises them
+# ---------------------------------------------------------------------------
+
+
+def _transcript_archive_dir(cwd: str) -> str:
+    """Return the directory we archive transcripts into.
+
+    Honours ``CADAGENT_TRANSCRIPT_DIR`` when set (lets tests point to a
+    scratch path). Otherwise writes alongside the project at
+    ``<cwd>/.cadagent.transcripts``.
+    """
+    env = os.environ.get("CADAGENT_TRANSCRIPT_DIR")
+    if env:
+        return env
+    base = cwd or os.getcwd()
+    return os.path.join(base, ".cadagent.transcripts")
+
+
+async def archive_on_precompact(input_data: dict, tool_use_id: str | None, context) -> dict:
+    """PreCompact hook: copy the live transcript to an archive path.
+
+    Compaction rewrites the on-disk transcript to a summary. Archiving it
+    first gives us:
+      - fodder for the Phase 1 replay harness (deterministic input).
+      - a forensic trail when the agent does something surprising in long
+        sessions.
+
+    Failures are swallowed — the hook must not block the compaction it
+    can't control anyway.
+    """
+    src = input_data.get("transcript_path") or ""
+    session = input_data.get("session_id") or "unknown-session"
+    cwd = input_data.get("cwd") or ""
+    trigger = input_data.get("trigger") or "auto"
+    try:
+        if src and os.path.exists(src):
+            archive_dir = _transcript_archive_dir(cwd)
+            os.makedirs(archive_dir, exist_ok=True)
+            stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+            dest = os.path.join(
+                archive_dir, f"{session}-{stamp}-{trigger}.jsonl"
+            )
+            shutil.copyfile(src, dest)
+            sys.stderr.write(
+                f"[cadagent hooks] precompact archive: {dest}\n"
+            )
+            sys.stderr.flush()
+    except Exception as exc:  # hook must never raise
+        sys.stderr.write(
+            f"[cadagent hooks] precompact archive failed ({trigger}): {exc}\n"
+        )
+        sys.stderr.flush()
     return {}

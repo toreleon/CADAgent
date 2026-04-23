@@ -231,3 +231,62 @@ def test_on_subagent_stop_returns_empty_dict(hooks, capsys):
     captured = capsys.readouterr()
     assert "subagent stop" in captured.err
     assert "reviewer" in captured.err
+
+
+# --- precompact ------------------------------------------------------------
+
+
+def test_precompact_copies_transcript_to_archive(hooks, tmp_path, monkeypatch):
+    src = tmp_path / "live-transcript.jsonl"
+    src.write_text('{"role":"user","text":"hi"}\n')
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setenv("CADAGENT_TRANSCRIPT_DIR", str(archive_dir))
+
+    out = _run(hooks.archive_on_precompact(
+        {
+            "transcript_path": str(src),
+            "session_id": "sess-xyz",
+            "cwd": str(tmp_path),
+            "trigger": "auto",
+        },
+        None, None,
+    ))
+    assert out == {}
+    copies = sorted(archive_dir.glob("sess-xyz-*-auto.jsonl"))
+    assert len(copies) == 1
+    assert copies[0].read_text() == src.read_text()
+
+
+def test_precompact_swallows_errors(hooks, tmp_path, monkeypatch, capsys):
+    # Source missing — hook must not raise.
+    monkeypatch.setenv("CADAGENT_TRANSCRIPT_DIR", str(tmp_path / "archive"))
+    out = _run(hooks.archive_on_precompact(
+        {
+            "transcript_path": str(tmp_path / "does-not-exist.jsonl"),
+            "session_id": "sess-abc",
+            "cwd": str(tmp_path),
+            "trigger": "manual",
+        },
+        None, None,
+    ))
+    assert out == {}
+    # No file created, no exception raised.
+    assert not (tmp_path / "archive").exists() or not list((tmp_path / "archive").iterdir())
+
+
+def test_precompact_archive_dir_defaults_to_cwd_subdir(hooks, tmp_path, monkeypatch):
+    monkeypatch.delenv("CADAGENT_TRANSCRIPT_DIR", raising=False)
+    src = tmp_path / "t.jsonl"
+    src.write_text("line\n")
+    _run(hooks.archive_on_precompact(
+        {
+            "transcript_path": str(src),
+            "session_id": "s1",
+            "cwd": str(tmp_path),
+            "trigger": "auto",
+        },
+        None, None,
+    ))
+    archive = tmp_path / ".cadagent.transcripts"
+    assert archive.exists()
+    assert list(archive.glob("s1-*.jsonl"))

@@ -247,6 +247,9 @@ class AgentRuntime:
         subagent_stop_matchers = [
             HookMatcher(matcher=None, hooks=[cad_hooks.on_subagent_stop]),
         ]
+        precompact_matchers = [
+            HookMatcher(matcher=None, hooks=[cad_hooks.archive_on_precompact]),
+        ]
         # "AskUserQuestion" is a built-in SDK tool handled client-side
         # in can_use_tool (see permissions.py); include it explicitly so
         # the allow-list doesn't accidentally block it.
@@ -264,6 +267,7 @@ class AgentRuntime:
                 "PreToolUse": cad_hook_matchers,
                 "PostToolUse": cad_post_matchers,
                 "SubagentStop": subagent_stop_matchers,
+                "PreCompact": precompact_matchers,
             },
             permission_mode=_resolve_permission_mode(),
             include_partial_messages=True,

@@ -28,10 +28,14 @@ def test_make_box_creates_single_valid_solid(tmp_path, transport_env):
     assert trace.returncode in (0, 1), f"FreeCADCmd crashed: {trace.stderr[-1000:]}"
     assert trace.errors == [], f"panel recorded errors: {trace.errors}"
 
-    # Agent invoked at least one cad tool without is_error.
+    # Agent invoked at least one cad tool without is_error. Other tool names
+    # (AskUserQuestion, Agent, built-in SDK helpers) are expected once the
+    # orchestrator's lifecycle is active — we only require at least one
+    # successful mcp__cad__ tool call.
     good = trace.successful_tool_names()
     assert good, f"no successful tool calls; trace={[e for e in trace.trace if e.get('kind')=='tool_use']}"
-    assert all(n.startswith("mcp__cad__") for n in good), f"unexpected tool names: {good}"
+    cad_calls = [n for n in good if n.startswith("mcp__cad__")]
+    assert cad_calls, f"no mcp__cad__ tool calls in sequence {good}"
 
     # Topology: at least one finite-volume solid with box dims == 20,10,5.
     # Tier-A macros produce a Body+Sketch+Pad hierarchy; Tier-C returns a
