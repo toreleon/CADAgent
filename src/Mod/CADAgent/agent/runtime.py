@@ -54,28 +54,21 @@ except ImportError:
     except ImportError:
         from PySide2 import QtCore
 
-# FreeCAD's GUI replaces sys.stderr with a C++-backed stream whose __class__
-# attribute isn't introspectable the way @dataclass(f.default.__class__) needs.
-# claude_agent_sdk's ClaudeAgentOptions defaults `debug_stderr = sys.stderr`
-# at import time, so that introspection blows up. Restore the original stream
-# for the duration of the import.
-_saved_stderr = sys.stderr
-try:
-    sys.stderr = sys.__stderr__ or sys.stdout
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ClaudeSDKClient,
-        ResultMessage,
-        StreamEvent,
-        TextBlock,
-        ThinkingBlock,
-        ToolResultBlock,
-        ToolUseBlock,
-        create_sdk_mcp_server,
-    )
-finally:
-    sys.stderr = _saved_stderr
+# The package __init__ warm-imports claude_agent_sdk under a restored stderr
+# so its dataclass module body runs cleanly under FreeCAD; by the time we get
+# here it's already cached in sys.modules.
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ResultMessage,
+    StreamEvent,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    create_sdk_mcp_server,
+)
 
 from . import sessions as cad_sessions
 from . import tools as cad_tools
