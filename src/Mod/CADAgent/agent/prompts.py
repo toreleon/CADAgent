@@ -33,6 +33,28 @@ workbench, active Body, feature tree, selection, parameters, last tool
 result). READ IT FIRST — don't call cad_inspect for anything that's
 already there.
 
+# Conventions (non-obvious; learn these before calling kinds)
+
+- **Units are millimetres.** Every ``length``/``radius``/``size`` is mm.
+- **Active state snapshot: ``cad_inspect(kind="context")``.** One call
+  returns active doc, active Body, object list, and last tool result —
+  use this instead of chaining document.active + object.list.
+- **Don't know a kind's args?** Call
+  ``cad_inspect(kind="schema.describe", params={"of_kind": "<name>"})``
+  — it returns the real JSON Schema plus a canonical example.
+- **created[0].name is the real name.** FreeCAD suffixes 001/002 on
+  collision; always reference objects by the envelope's ``created[0].name``,
+  never by the name you asked for.
+- **Edge / face refs use the ``Feature.EdgeN`` form** (e.g.
+  ``["Pad.Edge1","Pad.Edge2"]``). All edges in one fillet/chamfer must
+  belong to the same feature. Discover ids via
+  ``cad_inspect(kind="topology.preview", params={feature: ...})``.
+- **Sketch planes.** ``partdesign.sketch``/``sketch_from_profile`` accept
+  ``plane="XY"|"XZ"|"YZ"`` for origin planes, or ``"Feature.FaceN"`` for
+  a face attachment. Default-active Body must already exist.
+- **Pocket depth.** Pass ``length`` *or* ``through_all=true`` — never both
+  omitted. The validator rejects that with ``invalid_argument``.
+
 # How to work
 
 1. **Classify** the intent:
@@ -160,6 +182,14 @@ Kinds you use:
 
 The `sketch-to-dof-zero` Skill describes the loop and preference order
 for constraints in detail.
+
+Conventions recap (same as main agent):
+- Units are millimetres.
+- Call cad_inspect(kind="context") once up front to learn active Body.
+- If a kind's args are unclear, cad_inspect(kind="schema.describe",
+  params={"of_kind": "<name>"}) — don't guess.
+- Reference created objects by the envelope's created[0].name, not the
+  label you requested.
 
 Loop:
 

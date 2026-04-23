@@ -20,9 +20,7 @@ from ..tools import geometry as _geom
 from ..tools import diagnostics as _diag
 from ..tools import memory as _mem
 from ..tools import planning as _plan
-from ..tools.partdesign import body as _pd_body
 from ..tools.partdesign import sketch as _pd_sketch
-from ..tools.partdesign import dress_ups as _pd_du
 from ..tools.macros import plate as _macro_plate
 from ..tools.macros import holes as _macro_holes
 
@@ -128,11 +126,7 @@ passthrough(
     description="Parametric Part::Cone (radius1, radius2, height in mm).",
     params_schema={"radius1": "float", "radius2": "float", "height": "float", "name": "str?", "doc": "str?"},
 )
-passthrough(
-    verb="create", kind="partdesign.body", v1_tool=_pd_body.create_body,
-    description="Create a new PartDesign::Body (and optionally make it active).",
-    params_schema={"label": "str?", "doc": "str?"},
-)
+# partdesign.body is now native (providers/partdesign_shell.py).
 passthrough(
     verb="create", kind="partdesign.sketch", v1_tool=_pd_sketch.create_sketch,
     description="Create a blank Sketcher sketch on a plane (XY/XZ/YZ or Feature.FaceN).",
@@ -146,24 +140,8 @@ passthrough(
 # NOTE: partdesign.pad and partdesign.pocket are now native providers in
 # ``providers/partdesign_native.py`` (uniform envelope, Pydantic validation,
 # real ``feat.Name`` in the created[] list, ``type`` instead of ``type_``).
-passthrough(
-    verb="create", kind="partdesign.fillet", v1_tool=_pd_du.fillet,
-    description=(
-        "Add a PartDesign::Fillet. Pass 'edges' (NOT 'target_edges') as a list "
-        "of 'FeatureName.EdgeN' refs — e.g. ['Pad.Edge1','Pad.Edge2']. Use "
-        "cad_inspect(kind='topology.preview', params={feature:...}) first to "
-        "find edge ids."
-    ),
-    params_schema={"edges": "list[str]", "radius": "float", "name": "str?", "doc": "str?"},
-)
-passthrough(
-    verb="create", kind="partdesign.chamfer", v1_tool=_pd_du.chamfer,
-    description=(
-        "Add a PartDesign::Chamfer. Pass 'edges' as a list of 'FeatureName.EdgeN' "
-        "refs and 'size' as the chamfer length in mm."
-    ),
-    params_schema={"edges": "list[str]", "size": "float", "name": "str?", "doc": "str?"},
-)
+# partdesign.fillet + partdesign.chamfer are now native
+# (providers/partdesign_shell.py).
 passthrough(
     verb="create", kind="part.boolean", v1_tool=_geom.boolean_op,
     description="Parametric boolean (op='fuse'|'cut'|'common') between two existing objects.",
@@ -201,11 +179,8 @@ passthrough(
     description="Set position [x,y,z] mm and/or rotation (axis, angle deg) on an object.",
     params_schema={"name": "str", "position": "list[float]?", "rotation_axis": "list[float]?", "rotation_angle": "float?", "doc": "str?"},
 )
-passthrough(
-    verb="modify", kind="datum.set", v1_tool=_pd_body.set_datum,
-    description="Set a feature property to a value or expression (e.g., 'Parameters.Thickness').",
-    params_schema={"feature": "str", "property_": "str", "value_or_expr": "any", "doc": "str?"},
-)
+# datum.set is now native (providers/partdesign_shell.py) and uses
+# ``property`` / ``value`` instead of the reserved-word workarounds.
 passthrough(
     verb="modify", kind="parameter.set", v1_tool=_mem.set_parameter,
     description="Write a parameter to the sidecar AND the Parameters spreadsheet.",

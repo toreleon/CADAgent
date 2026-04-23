@@ -92,3 +92,53 @@ registry.register(
     read_only=True,
     example={"of_kind": "partdesign.pad"},
 )
+
+
+# inspect.context — one-call active-state snapshot. Removes the "which body
+# am I padding into?" guessing that today forces the agent to chain several
+# inspect calls or assume the wrong Body.
+
+def _context(doc, params: dict[str, Any]) -> dict:
+    from ..envelope import ok_envelope
+    import FreeCAD as App
+
+    resolved = doc if doc is not None else App.ActiveDocument
+    extras: dict[str, Any] = {
+        "documents": list(App.listDocuments().keys()),
+        "units": "mm",  # FreeCAD internal unit for lengths; informational.
+    }
+    if resolved is not None:
+        # Compact object summary — name/type/visible so the agent can pick a
+        # target without another cad_inspect round-trip.
+        objs: list[dict[str, Any]] = []
+        for obj in resolved.Objects:
+            item = {"name": obj.Name, "label": obj.Label, "type": obj.TypeId}
+            try:
+                vo = getattr(obj, "ViewObject", None)
+                if vo is not None:
+                    item["visible"] = bool(vo.Visibility)
+            except Exception:
+                pass
+            objs.append(item)
+        extras["objects"] = objs
+        # The most recent mutating tool result (echoed from _LAST_RESULT).
+        from ..tools._shared import _LAST_RESULT
+        extras["last_result"] = _LAST_RESULT.get("summary")
+    return ok_envelope("context", doc=resolved, extras=extras)
+
+
+registry.register(
+    verb="inspect",
+    kind="context",
+    description=(
+        "Return a single snapshot of the active state: active document, "
+        "active Body, object list (name/type/visible), and the previous "
+        "tool result. Call this once at the start of a turn instead of "
+        "chaining document.active + object.list + selection.get."
+    ),
+    params_schema={"doc": "str?"},
+    execute=_context,
+    native=True,
+    read_only=True,
+    example={},
+)

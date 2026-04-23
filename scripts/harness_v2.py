@@ -200,7 +200,9 @@ def main() -> int:
     h.section("partdesign.body → sketch → pad")
     r = h.call("create", "partdesign.body", params={"label": "TestBody", "doc": "HarnessDoc"})
     h.check("partdesign.body ok", r.get("ok") is True, str(r)[:200])
-    body_name = (r.get("created") or [None])[0] or r.get("primary")
+    # Native envelope: created is list[dict{name,...}].
+    created0 = (r.get("created") or [None])[0]
+    body_name = created0.get("name") if isinstance(created0, dict) else (created0 or r.get("primary"))
     h.check("body created name returned", bool(body_name), str(r)[:200])
     if body_name:
         body_obj = doc.getObject(body_name)
@@ -298,11 +300,11 @@ def main() -> int:
     # missing required params → structured error with expected_params
     # -----------------------------------------------------------------
     h.section("passthrough missing-params preflight")
-    # Use a still-passthrough kind (partdesign.fillet) to exercise the
-    # missing-params path. pad/pocket moved to the native provider which
-    # reports missing fields via Pydantic as kind='invalid_argument'
-    # (covered by the native tests below).
-    r = h.call("create", "partdesign.fillet", params={"radius": 1.0, "doc": "HarnessDoc"})
+    # Use a still-passthrough kind (part.cylinder) to exercise the
+    # missing-params path. pad/pocket/body/fillet/chamfer/datum moved to the
+    # native provider which reports missing fields via Pydantic as
+    # kind='invalid_argument' (covered by the native tests below).
+    r = h.call("create", "part.cylinder", params={"radius": 1.0, "doc": "HarnessDoc"})
     err_field = r.get("error") if isinstance(r, dict) else None
     err_kind = err_field.get("kind") if isinstance(err_field, dict) else err_field
     h.check(
@@ -312,12 +314,12 @@ def main() -> int:
     )
     h.check(
         "missing-params error includes expected_params",
-        isinstance(r.get("expected_params"), dict) and "edges" in (r.get("expected_params") or {}),
+        isinstance(r.get("expected_params"), dict) and "height" in (r.get("expected_params") or {}),
         str(r)[:300],
     )
     h.check(
-        "missing-params error lists 'edges' as missing",
-        "edges" in (r.get("missing") or []),
+        "missing-params error lists 'height' as missing",
+        "height" in (r.get("missing") or []),
         str(r)[:300],
     )
 
@@ -417,6 +419,83 @@ def main() -> int:
                 isinstance(pocket0, dict) and "name" in pocket0,
                 str(pocket0)[:200],
             )
+
+    # -----------------------------------------------------------------
+    # inspect.context — one-call active-state snapshot
+    # -----------------------------------------------------------------
+    h.section("inspect.context")
+    r = h.call("inspect", "context", params={"doc": "HarnessDoc"})
+    h.check("inspect.context ok", r.get("ok") is True, str(r)[:300])
+    h.check(
+        "context.objects is a list of dicts",
+        isinstance(r.get("objects"), list) and len(r["objects"]) > 0
+        and isinstance(r["objects"][0], dict) and "name" in r["objects"][0],
+        str(r.get("objects"))[:200],
+    )
+    h.check(
+        "context.documents includes HarnessDoc",
+        isinstance(r.get("documents"), list) and "HarnessDoc" in r["documents"],
+        str(r.get("documents"))[:200],
+    )
+    h.check("context.units=mm", r.get("units") == "mm")
+
+    # -----------------------------------------------------------------
+    # native datum.set — 'property' (not 'property_'), 'value' (not 'value_or_expr')
+    # -----------------------------------------------------------------
+    h.section("modify.datum.set (native)")
+    if pad_name:
+        r = h.call("modify", "datum.set", params={
+            "feature": pad_name, "property": "Length", "value": 5.0, "doc": "HarnessDoc",
+        })
+        h.check("datum.set literal ok", r.get("ok") is True, str(r)[:300])
+        pad = doc.getObject(pad_name)
+        h.check("Pad.Length == 5mm", pad is not None and abs(float(pad.Length) - 5.0) < 1e-6,
+                f"got {getattr(pad, 'Length', None)}")
+        h.check(
+            "datum.set modified[] carries feature",
+            isinstance(r.get("modified"), list) and len(r["modified"]) == 1
+            and r["modified"][0].get("name") == pad_name,
+            str(r.get("modified"))[:200],
+        )
+        # Wrong property name → invalid_argument with hint
+        r = h.call("modify", "datum.set", params={
+            "feature": pad_name, "property": "NotAProp", "value": 1, "doc": "HarnessDoc",
+        })
+        err_field = r.get("error")
+        err_kind = err_field.get("kind") if isinstance(err_field, dict) else err_field
+        h.check(
+            "datum.set wrong property → invalid_argument",
+            r.get("ok") is False and err_kind == "invalid_argument",
+            str(r)[:300],
+        )
+
+    # -----------------------------------------------------------------
+    # native fillet — edge-ref validation + real feature name
+    # -----------------------------------------------------------------
+    h.section("create.partdesign.fillet (native)")
+    if pad_name:
+        # Bad edge-ref shape → invalid_argument (Pydantic validator)
+        r = h.call("create", "partdesign.fillet", params={
+            "edges": ["not an edge ref"], "radius": 1.0, "doc": "HarnessDoc",
+        })
+        err_field = r.get("error")
+        err_kind = err_field.get("kind") if isinstance(err_field, dict) else err_field
+        h.check(
+            "fillet bad edge ref → invalid_argument",
+            r.get("ok") is False and err_kind == "invalid_argument",
+            str(r)[:300],
+        )
+        # Good ref — reuse an edge from the padded box
+        r = h.call("create", "partdesign.fillet", params={
+            "edges": [f"{pad_name}.Edge1"], "radius": 0.5, "doc": "HarnessDoc",
+        })
+        h.check("fillet ok", r.get("ok") is True, str(r)[:400])
+        fillet0 = (r.get("created") or [None])[0]
+        h.check(
+            "fillet created[0] is dict with valid=True",
+            isinstance(fillet0, dict) and fillet0.get("valid") is True,
+            str(fillet0)[:200],
+        )
 
     # -----------------------------------------------------------------
     # Summary
