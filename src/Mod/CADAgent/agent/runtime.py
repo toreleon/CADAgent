@@ -141,6 +141,18 @@ class _PanelProxy(QtCore.QObject):
     askUserQuestion = QtCore.Signal(object, object)  # questions, cf_future
     sessionChanged = QtCore.Signal(str)  # new session_id (captured from SDK)
 
+    # --- New scaffolding signals (Moves 1-5 will emit these) -----------
+    # Each is queued across threads: hooks / subagent-orchestration code
+    # lives off the GUI thread and must never touch the panel directly.
+    milestoneUpsert = QtCore.Signal(str, str, str, object, object)
+    # (milestone_id, title, status, index, total)
+    verificationResult = QtCore.Signal(str, object)  # parent_tool_id, payload
+    decisionRecorded = QtCore.Signal(str, object)  # row_id_hint, payload
+    compactionEvent = QtCore.Signal(object)  # payload dict
+    subagentSpan = QtCore.Signal(str, str, str)  # action, agent, task
+    permissionModeChanged = QtCore.Signal(str)  # new mode, for hot-apply UI sync
+    streamState = QtCore.Signal(str, bool)  # row_id, is_partial
+
     def __init__(self, panel):
         super().__init__(panel)
         self._panel = panel
@@ -155,6 +167,25 @@ class _PanelProxy(QtCore.QObject):
         self.askUserQuestion.connect(self._on_ask_user_question)
         if hasattr(panel, "on_session_changed"):
             self.sessionChanged.connect(panel.on_session_changed)
+        # New row-kind wiring. The panel's *_threadsafe forwarders mutate
+        # the model on the GUI thread. If the panel lacks a method (e.g.
+        # headless CLI stub) the connect is simply skipped.
+        if hasattr(panel, "upsert_milestone"):
+            self.milestoneUpsert.connect(panel.upsert_milestone)
+        if hasattr(panel, "emit_verification"):
+            self.verificationResult.connect(panel.emit_verification)
+        if hasattr(panel, "emit_decision"):
+            self.decisionRecorded.connect(panel.emit_decision)
+        if hasattr(panel, "emit_compaction"):
+            self.compactionEvent.connect(panel.emit_compaction)
+        if hasattr(panel, "emit_subagent_span"):
+            self.subagentSpan.connect(panel.emit_subagent_span)
+        if hasattr(panel, "set_stream_state"):
+            self.streamState.connect(panel.set_stream_state)
+        if hasattr(panel, "bridge") and hasattr(panel.bridge, "set_permission_mode"):
+            self.permissionModeChanged.connect(
+                lambda mode: panel.bridge.set_permission_mode(mode, persist=False)
+            )
 
     def _on_permission_request(self, tool_name, tool_input, cf_future):
         """Runs on the GUI thread — asks the panel, resolves the cf_future
@@ -320,6 +351,10 @@ class AgentRuntime:
             sid = getattr(msg, "session_id", None)
             if sid:
                 self._capture_session_id(sid)
+            # The SDK emits a final (non-partial) AssistantMessage after the
+            # streaming deltas complete — flip the open assistant row from
+            # "still typing" to finalised.
+            self._proxy.streamState.emit("", False)
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     # Text already streamed via StreamEvent deltas; skip to avoid
@@ -449,3 +484,38 @@ class AgentRuntime:
         if self._loop is None:
             return
         asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
+
+    # --- Scaffolding emit helpers --------------------------------------
+    #
+    # Moves 1-5 (verification hooks, planner/executor, decision recorder,
+    # subagent orchestration, PreCompact archiver) call these from off the
+    # GUI thread. The proxy signals are QueuedConnection-marshaled, so
+    # callers never need to know about Qt threads. Every helper is a
+    # one-liner on purpose: the panel owns rendering, the runtime just
+    # fans events in.
+    def emit_milestone(
+        self,
+        milestone_id: str,
+        title: str,
+        status: str,
+        index: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        self._proxy.milestoneUpsert.emit(
+            milestone_id or "", title or "", status or "pending", index, total
+        )
+
+    def emit_verification(self, parent_tool_id: str, payload: dict) -> None:
+        self._proxy.verificationResult.emit(parent_tool_id or "", payload or {})
+
+    def emit_decision(self, payload: dict) -> None:
+        self._proxy.decisionRecorded.emit("", payload or {})
+
+    def emit_compaction(self, payload: dict) -> None:
+        self._proxy.compactionEvent.emit(payload or {})
+
+    def begin_subagent(self, agent: str, task: str = "") -> None:
+        self._proxy.subagentSpan.emit("start", agent or "", task or "")
+
+    def end_subagent(self, agent: str = "") -> None:
+        self._proxy.subagentSpan.emit("end", agent or "", "")

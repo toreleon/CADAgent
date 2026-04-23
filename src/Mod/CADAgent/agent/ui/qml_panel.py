@@ -63,6 +63,10 @@ _QML_MAIN = os.path.join(_HERE, "qml", "ChatPanel.qml")
 _ROLE_KIND = QtCore.Qt.UserRole + 1
 _ROLE_TEXT = QtCore.Qt.UserRole + 2
 _ROLE_META = QtCore.Qt.UserRole + 3
+_ROLE_ROW_ID = QtCore.Qt.UserRole + 4
+
+
+_VALID_PERMISSION_MODES = ("default", "acceptEdits", "plan", "bypassPermissions")
 
 
 def _preview(value: Any, limit: int = 400) -> str:
@@ -98,6 +102,12 @@ class MessagesModel(QtCore.QAbstractListModel):
         self._open_thinking: int | None = None
         self._tool_index: dict[str, int] = {}
         self._perm_index: dict[str, int] = {}
+        self._milestone_index: dict[str, int] = {}
+        self._row_by_id: dict[str, int] = {}
+        self._next_row_id: int = 0
+        # When the planner delegates to a subagent, subsequent rows inherit
+        # meta.agent = <name> until end_subagent() clears it. None = main.
+        self._current_agent: str | None = None
 
     # --- QAbstractListModel overrides --------------------------------
 
@@ -116,6 +126,8 @@ class MessagesModel(QtCore.QAbstractListModel):
             return row.get("text", "")
         if role == _ROLE_META:
             return row.get("meta", {})
+        if role == _ROLE_ROW_ID:
+            return row.get("rowId", "")
         return None
 
     def roleNames(self):
@@ -123,15 +135,30 @@ class MessagesModel(QtCore.QAbstractListModel):
             _ROLE_KIND: b"kind",
             _ROLE_TEXT: b"text",
             _ROLE_META: b"meta",
+            _ROLE_ROW_ID: b"rowId",
         }
 
     # --- Mutations ----------------------------------------------------
 
+    def _alloc_row_id(self) -> str:
+        rid = f"r{self._next_row_id}"
+        self._next_row_id += 1
+        return rid
+
     def _append(self, row: dict) -> int:
+        # Every row gets a stable rowId; callers that need in-place updates
+        # keep it (via the _row_by_id map or a kind-specific index dict).
+        row.setdefault("rowId", self._alloc_row_id())
+        # Inherit meta.agent from the active subagent span, if any.
+        if self._current_agent:
+            meta = dict(row.get("meta") or {})
+            meta.setdefault("agent", self._current_agent)
+            row["meta"] = meta
         idx = len(self._rows)
         self.beginInsertRows(QtCore.QModelIndex(), idx, idx)
         self._rows.append(row)
         self.endInsertRows()
+        self._row_by_id[row["rowId"]] = idx
         return idx
 
     def _emit_changed(self, idx: int) -> None:
@@ -147,6 +174,9 @@ class MessagesModel(QtCore.QAbstractListModel):
         self._open_thinking = None
         self._tool_index.clear()
         self._perm_index.clear()
+        self._milestone_index.clear()
+        self._row_by_id.clear()
+        self._current_agent = None
         self.endResetModel()
 
     def add_user(self, text: str) -> None:
@@ -169,13 +199,38 @@ class MessagesModel(QtCore.QAbstractListModel):
     def append_assistant(self, chunk: str) -> None:
         self._collapse_thinking()
         if self._open_assistant is None:
-            self._open_assistant = self._append({"kind": "assistant", "text": chunk})
+            self._open_assistant = self._append({
+                "kind": "assistant",
+                "text": chunk,
+                "meta": {"isPartial": True},
+            })
             return
         row = self._rows[self._open_assistant]
         row["text"] = row.get("text", "") + chunk
         self._emit_changed(self._open_assistant)
 
+    def mark_assistant_final(self) -> None:
+        """Flip the currently-open assistant row from streaming to final."""
+        if self._open_assistant is None:
+            return
+        row = self._rows[self._open_assistant]
+        meta = dict(row.get("meta") or {})
+        if not meta.get("isPartial"):
+            return
+        meta["isPartial"] = False
+        row["meta"] = meta
+        self._emit_changed(self._open_assistant)
+
     def _close_assistant(self) -> None:
+        if self._open_assistant is not None:
+            # A new row is about to push the assistant row out — the prior
+            # assistant text is finalised by definition.
+            row = self._rows[self._open_assistant]
+            meta = dict(row.get("meta") or {})
+            if meta.get("isPartial"):
+                meta["isPartial"] = False
+                row["meta"] = meta
+                self._emit_changed(self._open_assistant)
         self._open_assistant = None
 
     def append_thinking(self, chunk: str) -> None:
@@ -284,12 +339,152 @@ class MessagesModel(QtCore.QAbstractListModel):
         row["meta"] = meta
         self._emit_changed(idx)
 
+    # --- New scaffolding row kinds -----------------------------------
+    #
+    # Milestone banner rows are emitted by the planner (Move 2). The same
+    # milestoneId is upserted as status transitions (pending → active →
+    # done|failed) so the row updates in place rather than appending a new
+    # line on every progress tick.
+    def upsert_milestone(
+        self,
+        milestone_id: str,
+        title: str,
+        status: str,
+        index: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        self._close_assistant()
+        self._collapse_thinking()
+        idx = self._milestone_index.get(milestone_id)
+        meta = {
+            "milestoneId": milestone_id,
+            "status": status,
+            "index": index,
+            "total": total,
+        }
+        if idx is None:
+            new_idx = self._append(
+                {"kind": "milestone", "text": title, "meta": meta}
+            )
+            self._milestone_index[milestone_id] = new_idx
+            return
+        row = self._rows[idx]
+        prev_meta = dict(row.get("meta") or {})
+        prev_meta.update({k: v for k, v in meta.items() if v is not None})
+        row["meta"] = prev_meta
+        if title:
+            row["text"] = title
+        self._emit_changed(idx)
+
+    # Verification rows are children of a tool row. PostToolUse hook fires
+    # these; if the parent tool row is gone (e.g. cleared) we still append
+    # the verification so the user sees the hook output.
+    def add_verification(
+        self,
+        parent_tool_id: str,
+        checks: list,
+        ok: bool,
+    ) -> None:
+        meta = {
+            "parentToolId": parent_tool_id or "",
+            "checks": list(checks or []),
+            "ok": bool(ok),
+        }
+        idx = self._append({"kind": "verification", "text": "", "meta": meta})
+        # Link to parent tool row (may have already closed → tool_index is
+        # popped on set_tool_result, so look through the rows instead).
+        if parent_tool_id:
+            for i, row in enumerate(self._rows):
+                if row.get("kind") != "tool":
+                    continue
+                rmeta = row.get("meta") or {}
+                if rmeta.get("toolId") != parent_tool_id:
+                    continue
+                rmeta = dict(rmeta)
+                children = list(rmeta.get("children") or [])
+                children.append(self._rows[idx]["rowId"])
+                rmeta["children"] = children
+                row["meta"] = rmeta
+                self._emit_changed(i)
+                break
+
+    def add_decision(
+        self,
+        decision_id: str,
+        title: str,
+        rationale: str = "",
+        alternatives: list | None = None,
+        tags: list | None = None,
+    ) -> None:
+        self._close_assistant()
+        self._collapse_thinking()
+        meta = {
+            "decisionId": decision_id,
+            "rationale": rationale or "",
+            "alternatives": list(alternatives or []),
+            "tags": list(tags or []),
+            "collapsed": True,
+        }
+        self._append({"kind": "decision", "text": title, "meta": meta})
+
+    def add_compaction(
+        self,
+        tokens_before: int | None,
+        tokens_after: int | None,
+        archive_path: str = "",
+    ) -> None:
+        self._close_assistant()
+        self._collapse_thinking()
+        meta = {
+            "tokensBefore": tokens_before,
+            "tokensAfter": tokens_after,
+            "archivePath": archive_path or "",
+        }
+        self._append({"kind": "compaction", "text": "", "meta": meta})
+
+    # Subagent span — begin_subagent adds a header row and sets the
+    # inherited agent attribution for every row that follows until
+    # end_subagent() clears it.
+    def begin_subagent(self, agent: str, task: str) -> None:
+        self._close_assistant()
+        self._collapse_thinking()
+        # Add the header row before flipping _current_agent so the header
+        # itself is attributed to the spawning context, not the child.
+        self._append({
+            "kind": "subagent",
+            "text": task or "",
+            "meta": {"agent": agent or "", "action": "start"},
+        })
+        self._current_agent = agent or None
+
+    def end_subagent(self) -> None:
+        agent = self._current_agent
+        self._current_agent = None
+        self._append({
+            "kind": "subagent",
+            "text": "",
+            "meta": {"agent": agent or "", "action": "end"},
+        })
+
+    def toggle_collapse(self, row_id: str) -> None:
+        idx = self._row_by_id.get(row_id)
+        if idx is None:
+            return
+        row = self._rows[idx]
+        meta = dict(row.get("meta") or {})
+        meta["collapsed"] = not bool(meta.get("collapsed"))
+        row["meta"] = meta
+        self._emit_changed(idx)
+
 
 class QmlChatBridge(QtCore.QObject):
     """Slots + properties consumed by QML. Owns the model on behalf of the view."""
 
     busyChanged = QtCore.Signal()
     bypassChanged = QtCore.Signal()
+    permissionModeChanged = QtCore.Signal()
+    agentChanged = QtCore.Signal()
+    milestoneSummaryChanged = QtCore.Signal()
     scrollToEnd = QtCore.Signal()
 
     def __init__(self, model: MessagesModel, parent=None):
@@ -299,6 +494,9 @@ class QmlChatBridge(QtCore.QObject):
         self._panel: "QmlChatPanel | None" = None
         self._busy = False
         self._bypass = False
+        self._permission_mode: str = "default"
+        self._current_agent: str = "main"
+        self._milestone_summary: str = ""
         self._pending_perm: dict[str, asyncio.Future] = {}
         self._pending_ask: dict[str, Any] = {}  # concurrent.futures.Future
 
@@ -327,6 +525,51 @@ class QmlChatBridge(QtCore.QObject):
             return
         self._bypass = value
         self.bypassChanged.emit()
+
+    @QtCore.Property(str, notify=permissionModeChanged)
+    def permissionMode(self) -> str:
+        return self._permission_mode
+
+    def set_permission_mode(self, mode: str, persist: bool = True) -> None:
+        mode = mode if mode in _VALID_PERMISSION_MODES else "default"
+        if mode == self._permission_mode:
+            # Still ensure the derived bypass flag matches on first call.
+            desired = (mode == "bypassPermissions")
+            if desired != self._bypass:
+                self.set_bypass(desired)
+            return
+        self._permission_mode = mode
+        if persist:
+            try:
+                App.ParamGet(
+                    "User parameter:BaseApp/Preferences/Mod/CADAgent"
+                ).SetString("PermissionMode", mode)
+            except Exception:
+                pass
+        self.permissionModeChanged.emit()
+        self.set_bypass(mode == "bypassPermissions")
+
+    @QtCore.Property(str, notify=agentChanged)
+    def currentAgent(self) -> str:
+        return self._current_agent
+
+    def set_current_agent(self, agent: str) -> None:
+        agent = agent or "main"
+        if agent == self._current_agent:
+            return
+        self._current_agent = agent
+        self.agentChanged.emit()
+
+    @QtCore.Property(str, notify=milestoneSummaryChanged)
+    def milestoneSummary(self) -> str:
+        return self._milestone_summary
+
+    def set_milestone_summary(self, text: str) -> None:
+        text = text or ""
+        if text == self._milestone_summary:
+            return
+        self._milestone_summary = text
+        self.milestoneSummaryChanged.emit()
 
     # --- Slots (QML → Python) ----------------------------------------
 
@@ -389,6 +632,25 @@ class QmlChatBridge(QtCore.QObject):
             Gui.runCommand("CADAgent_ConfigureLLM")
         except Exception as exc:
             self._model.add_error(str(exc))
+
+    @QtCore.Slot(str)
+    def setPermissionMode(self, mode: str) -> None:
+        """Called from the topbar chip popup. Persists the new mode and
+        applies it to the next turn — the runtime re-reads the preference
+        inside ``_ensure_client`` so we don't need to mutate the live SDK
+        options."""
+        prev = self._permission_mode
+        self.set_permission_mode(mode)
+        if prev != self._permission_mode:
+            self._model.add_system(
+                translate("CADAgent", "Permission mode: {0}").format(
+                    self._permission_mode
+                )
+            )
+
+    @QtCore.Slot(str)
+    def toggleCollapse(self, row_id: str) -> None:
+        self._model.toggle_collapse(row_id)
 
     @QtCore.Slot(str, bool, str)
     def decidePermission(self, req_id: str, allowed: bool, reason: str) -> None:
@@ -488,7 +750,7 @@ class QmlChatPanel(QtWidgets.QWidget):
             mode = App.ParamGet(
                 "User parameter:BaseApp/Preferences/Mod/CADAgent"
             ).GetString("PermissionMode", "default")
-            self.bridge.set_bypass(mode == "bypassPermissions")
+            self.bridge.set_permission_mode(mode, persist=False)
         except Exception:
             pass
 
@@ -542,6 +804,88 @@ class QmlChatPanel(QtWidgets.QWidget):
 
     def show_error(self, message: str) -> None:
         self.model.add_error(message)
+
+    # --- New scaffolding events (GUI-thread entry points) ------------
+    #
+    # Runtime's _PanelProxy signals fan into these. Each does exactly one
+    # thing: mutate the model and nudge the view. Never called off the GUI
+    # thread (the proxy's QueuedConnection takes care of marshaling).
+    def mark_assistant_final(self) -> None:
+        self.model.mark_assistant_final()
+
+    def upsert_milestone(
+        self,
+        milestone_id: str,
+        title: str,
+        status: str,
+        index,
+        total,
+    ) -> None:
+        self.model.upsert_milestone(
+            milestone_id, title, status,
+            index if isinstance(index, int) else None,
+            total if isinstance(total, int) else None,
+        )
+        # Topbar pip: show "◆ i/N — title" for the last non-done milestone.
+        if status in ("active", "pending") and title:
+            if isinstance(index, int) and isinstance(total, int):
+                self.bridge.set_milestone_summary(f"◆ {index}/{total} {title}")
+            else:
+                self.bridge.set_milestone_summary(f"◆ {title}")
+        elif status in ("done", "failed"):
+            # Clear the pip when the whole plan is at index == total.
+            if isinstance(index, int) and isinstance(total, int) and index >= total:
+                self.bridge.set_milestone_summary("")
+        self.bridge.scrollToEnd.emit()
+
+    def emit_verification(
+        self,
+        parent_tool_id: str,
+        payload: Any,
+    ) -> None:
+        payload = payload if isinstance(payload, dict) else {}
+        self.model.add_verification(
+            parent_tool_id,
+            payload.get("checks") or [],
+            bool(payload.get("ok", True)),
+        )
+        self.bridge.scrollToEnd.emit()
+
+    def emit_decision(self, row_id_hint: str, payload: Any) -> None:
+        payload = payload if isinstance(payload, dict) else {}
+        self.model.add_decision(
+            payload.get("decisionId") or row_id_hint or "",
+            payload.get("title") or "",
+            payload.get("rationale") or "",
+            payload.get("alternatives") or [],
+            payload.get("tags") or [],
+        )
+        self.bridge.scrollToEnd.emit()
+
+    def emit_compaction(self, payload: Any) -> None:
+        payload = payload if isinstance(payload, dict) else {}
+        self.model.add_compaction(
+            payload.get("tokensBefore"),
+            payload.get("tokensAfter"),
+            payload.get("archivePath") or "",
+        )
+        self.bridge.scrollToEnd.emit()
+
+    def emit_subagent_span(self, action: str, agent: str, task: str) -> None:
+        if action == "start":
+            self.model.begin_subagent(agent, task)
+            self.bridge.set_current_agent(agent or "main")
+        else:
+            self.model.end_subagent()
+            self.bridge.set_current_agent("main")
+        self.bridge.scrollToEnd.emit()
+
+    def set_stream_state(self, row_id: str, is_partial: bool) -> None:
+        # Today only the open assistant row streams; the row_id argument is
+        # reserved for the eventual per-row version used once subagents
+        # interleave their own streams.
+        if not is_partial:
+            self.model.mark_assistant_final()
 
     # --- Permission bridge (called from GUI thread via PanelProxy) ---
 

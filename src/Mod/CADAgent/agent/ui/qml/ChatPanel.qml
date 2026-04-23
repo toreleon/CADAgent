@@ -45,15 +45,89 @@ Rectangle {
         anchors.fill: parent
         spacing: 0
 
-        // ── Topbar: just three borderless glyph buttons, right-aligned ─
+        // ── Topbar ─────────────────────────────────────────────────────
+        // Left: agent indicator + milestone pip. Right: permission-mode
+        // chip and glyph action buttons. Everything is borderless, dim by
+        // default, lighting up on hover — matching the terminal aesthetic.
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: 6
             Layout.rightMargin: 6
             Layout.topMargin: 4
-            spacing: 0
+            spacing: 6
+
+            // Current-agent indicator. "main" is hidden to reduce noise;
+            // subagent names render as "[reviewer]" in accent.
+            Text {
+                text: bridge.currentAgent === "main" ? "" : "[" + bridge.currentAgent + "]"
+                visible: text.length > 0
+                color: accent
+                font.pixelSize: 10
+                font.family: monoFamily
+            }
+
+            // Milestone progress pip. Empty string hides it. The runtime
+            // updates this via upsert_milestone(), so no QML-side plumbing.
+            Text {
+                text: bridge.milestoneSummary
+                visible: text.length > 0
+                color: fgDim
+                font.pixelSize: 10
+                font.family: monoFamily
+                elide: Text.ElideRight
+                Layout.maximumWidth: 240
+            }
 
             Item { Layout.fillWidth: true }
+
+            // Permission-mode chip → popup menu.
+            ToolButton {
+                id: permChip
+                implicitHeight: 20
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Permission mode")
+                onClicked: permMenu.open()
+                background: Rectangle {
+                    color: "transparent"
+                    border.color: permChip.hovered ? border : borderSoft
+                    border.width: 1
+                    radius: radiusSm
+                }
+                contentItem: Text {
+                    text: {
+                        var m = bridge.permissionMode
+                        if (m === "bypassPermissions") return "⛨ bypass"
+                        if (m === "acceptEdits")       return "✎ auto"
+                        if (m === "plan")              return "◆ plan"
+                        return "● default"
+                    }
+                    color: bridge.permissionMode === "bypassPermissions" ? errColor
+                         : (bridge.permissionMode === "plan" ? accent : fgDim)
+                    font.pixelSize: 10
+                    font.family: monoFamily
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: 6
+                    rightPadding: 6
+                }
+                Menu {
+                    id: permMenu
+                    y: permChip.height
+                    Repeater {
+                        model: [
+                            { mode: "default",          label: qsTr("● default  (prompt per tool)") },
+                            { mode: "acceptEdits",      label: qsTr("✎ auto     (accept edits)") },
+                            { mode: "plan",             label: qsTr("◆ plan     (read-only planning)") },
+                            { mode: "bypassPermissions",label: qsTr("⛨ bypass   (no prompts)") }
+                        ]
+                        delegate: MenuItem {
+                            required property var modelData
+                            text: modelData.label
+                            onTriggered: bridge.setPermissionMode(modelData.mode)
+                        }
+                    }
+                }
+            }
 
             Repeater {
                 model: [
@@ -103,16 +177,21 @@ Rectangle {
                 property var rowModel: model
                 sourceComponent: {
                     switch (model.kind) {
-                        case "user":      return userRow
-                        case "assistant": return assistantRow
-                        case "thinking":  return thinkingRow
-                        case "system":    return systemRow
-                        case "error":     return errorRow
-                        case "footer":    return footerRow
-                        case "tool":      return toolRow
-                        case "perm":      return permRow
-                        case "ask":       return askRow
-                        default:          return systemRow
+                        case "user":         return userRow
+                        case "assistant":    return assistantRow
+                        case "thinking":     return thinkingRow
+                        case "system":       return systemRow
+                        case "error":        return errorRow
+                        case "footer":       return footerRow
+                        case "tool":         return toolRow
+                        case "perm":         return permRow
+                        case "ask":          return askRow
+                        case "milestone":    return milestoneRow
+                        case "verification": return verificationRow
+                        case "decision":     return decisionRow
+                        case "compaction":   return compactionRow
+                        case "subagent":     return subagentRow
+                        default:             return systemRow
                     }
                 }
             }
@@ -214,14 +293,6 @@ Rectangle {
 
                     Item { Layout.fillWidth: true }
 
-                    Text {
-                        text: "⛨ " + qsTr("bypass")
-                        visible: bridge.bypass
-                        color: fgDim
-                        font.pixelSize: 10
-                        font.family: monoFamily
-                    }
-
                     Button {
                         id: stopBtn
                         visible: bridge.busy
@@ -322,26 +393,40 @@ Rectangle {
     }
 
     // Assistant message: "⏺" bullet, markdown-rendered content.
+    // Shows a dim [agent] prefix when a subagent emitted the row, and a
+    // subtle "…" suffix while the row is still being streamed.
     Component {
         id: assistantRow
         Item {
             property var rowModel: parent ? parent.rowModel : null
+            property string _agent: rowModel && rowModel.meta ? (rowModel.meta.agent || "") : ""
+            property bool _partial: rowModel && rowModel.meta ? (rowModel.meta.isPartial === true) : false
             implicitHeight: asstText.implicitHeight + rowPadY * 2 + 4
             Text {
                 x: 6
                 y: rowPadY + 2
-                text: "⏺"
+                text: _partial ? "✻" : "⏺"
                 color: accent
                 font.pixelSize: fontMd
+            }
+            Text {
+                id: agentChip
+                visible: _agent.length > 0
+                x: gutter
+                y: rowPadY + 2
+                text: "[" + _agent + "]"
+                color: fgDim
+                font.pixelSize: fontSm
+                font.family: monoFamily
             }
             Text {
                 id: asstText
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.leftMargin: gutter
+                anchors.leftMargin: _agent.length > 0 ? gutter + agentChip.implicitWidth + 6 : gutter
                 anchors.rightMargin: 12
                 y: rowPadY + 2
-                text: rowModel ? rowModel.text : ""
+                text: (rowModel ? rowModel.text : "") + (_partial ? " …" : "")
                 color: fg
                 wrapMode: Text.Wrap
                 textFormat: Text.MarkdownText
@@ -474,23 +559,39 @@ Rectangle {
                 y: rowPadY + 2
                 spacing: 2
 
-                // Header line: "name(input)"
-                Text {
-                    width: parent.width
-                    text: {
-                        var n = rowModel ? rowModel.text : ""
-                        var inp = rowModel && rowModel.meta && rowModel.meta.inputPreview
-                                  ? rowModel.meta.inputPreview : ""
-                        if (inp.length === 0) return n + "()"
-                        // Single-line inputs → inline; multi-line → name(…)
-                        return inp.indexOf("\n") < 0
-                            ? n + "(" + inp + ")"
-                            : n + "(…)"
+                // Header line: "[agent] name(input)". Clickable when the
+                // row has verification children — toggles collapse.
+                MouseArea {
+                    width: toolHeader.implicitWidth
+                    height: toolHeader.implicitHeight
+                    cursorShape: (rowModel && rowModel.meta
+                                  && rowModel.meta.children
+                                  && rowModel.meta.children.length > 0)
+                                 ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        if (rowModel && rowModel.meta
+                            && rowModel.meta.children
+                            && rowModel.meta.children.length > 0)
+                            bridge.toggleCollapse(rowModel.rowId)
                     }
-                    color: fg
-                    wrapMode: Text.Wrap
-                    font.pixelSize: fontMd
-                    font.family: monoFamily
+                    Text {
+                        id: toolHeader
+                        width: toolCol.width
+                        text: {
+                            var n = rowModel ? rowModel.text : ""
+                            var a = rowModel && rowModel.meta && rowModel.meta.agent
+                                    ? "[" + rowModel.meta.agent + "] " : ""
+                            var inp = rowModel && rowModel.meta && rowModel.meta.inputPreview
+                                      ? rowModel.meta.inputPreview : ""
+                            var body = (inp.length === 0) ? (n + "()")
+                                     : (inp.indexOf("\n") < 0 ? n + "(" + inp + ")" : n + "(…)")
+                            return a + body
+                        }
+                        color: fg
+                        wrapMode: Text.Wrap
+                        font.pixelSize: fontMd
+                        font.family: monoFamily
+                    }
                 }
 
                 // Multi-line input (indented, tree corner)
@@ -516,7 +617,7 @@ Rectangle {
 
                 // Result (tree corner + preview)
                 Row {
-                    visible: rowModel && rowModel.meta && rowModel.meta.resultPreview
+                    visible: !!(rowModel && rowModel.meta && rowModel.meta.resultPreview)
                     spacing: 6
                     Text {
                         text: "⎿"
@@ -958,6 +1059,298 @@ Rectangle {
                             wrapMode: Text.Wrap
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Milestone banner — "◆ i/N  Title  · status". Planner (Move 2) upserts
+    // these; status transitions (pending/active/done/failed) update in place.
+    Component {
+        id: milestoneRow
+        Item {
+            property var rowModel: parent ? parent.rowModel : null
+            property string _status: rowModel && rowModel.meta ? (rowModel.meta.status || "pending") : "pending"
+            implicitHeight: msText.implicitHeight + rowPadY * 2 + 6
+            Rectangle {
+                anchors.fill: parent
+                anchors.topMargin: 2
+                anchors.bottomMargin: 2
+                color: Qt.rgba(accent.r, accent.g, accent.b,
+                               _status === "active" ? 0.08 : 0.03)
+                border.color: borderSoft
+                border.width: 0
+                radius: radiusSm
+            }
+            Text {
+                id: msMark
+                x: 6
+                y: rowPadY + 2
+                text: "◆"
+                color: _status === "failed" ? errColor
+                     : (_status === "done"  ? okColor
+                     : (_status === "active" ? accent : fgDim))
+                font.pixelSize: fontMd
+            }
+            Text {
+                id: msText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: gutter
+                anchors.rightMargin: 12
+                y: rowPadY + 2
+                text: {
+                    var m = rowModel && rowModel.meta ? rowModel.meta : {}
+                    var pref = ""
+                    if (typeof m.index === "number" && typeof m.total === "number")
+                        pref = m.index + "/" + m.total + "  "
+                    var t = rowModel ? rowModel.text : ""
+                    var badge = _status === "active" ? "" : ("  · " + _status)
+                    return pref + t + badge
+                }
+                color: _status === "failed" ? errColor
+                     : (_status === "done" ? fgDim : fg)
+                wrapMode: Text.Wrap
+                font.pixelSize: fontMd
+                font.bold: _status === "active"
+            }
+        }
+    }
+
+    // Verification row — PostToolUse hook output indented under the parent
+    // tool row. "✓" / "✗" per check, with an optional detail line.
+    Component {
+        id: verificationRow
+        Item {
+            property var rowModel: parent ? parent.rowModel : null
+            property bool _ok: rowModel && rowModel.meta ? (rowModel.meta.ok !== false) : true
+            implicitHeight: vCol.implicitHeight + rowPadY * 2
+            Text {
+                x: gutter - 6
+                y: rowPadY
+                text: "⎿"
+                color: fgMuted
+                font.family: monoFamily
+                font.pixelSize: fontSm
+            }
+            Column {
+                id: vCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: gutter + 12
+                anchors.rightMargin: 12
+                y: rowPadY
+                spacing: 1
+                Repeater {
+                    model: (rowModel && rowModel.meta && rowModel.meta.checks) || []
+                    delegate: Row {
+                        spacing: 6
+                        Text {
+                            text: (modelData.ok === false) ? "✗" : "✓"
+                            color: (modelData.ok === false) ? errColor : okColor
+                            font.pixelSize: fontSm
+                            font.family: monoFamily
+                            width: 10
+                        }
+                        Text {
+                            text: (modelData.name || "") +
+                                  (modelData.detail ? "  — " + modelData.detail : "")
+                            color: (modelData.ok === false) ? errColor : fgDim
+                            font.pixelSize: fontSm
+                            font.family: monoFamily
+                            wrapMode: Text.Wrap
+                            width: vCol.width - 20
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Decision record — "★ title" with collapsible rationale/alternatives.
+    Component {
+        id: decisionRow
+        Item {
+            property var rowModel: parent ? parent.rowModel : null
+            property bool _collapsed: rowModel && rowModel.meta ? (rowModel.meta.collapsed !== false) : true
+            implicitHeight: dCol.implicitHeight + rowPadY * 2 + 4
+            Text {
+                x: 6
+                y: rowPadY + 2
+                text: "★"
+                color: accent
+                font.pixelSize: fontMd
+            }
+            Column {
+                id: dCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: gutter
+                anchors.rightMargin: 12
+                y: rowPadY + 2
+                spacing: 3
+
+                MouseArea {
+                    width: dHeader.width
+                    height: dHeader.height
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: if (rowModel) bridge.toggleCollapse(rowModel.rowId)
+                    Row {
+                        id: dHeader
+                        spacing: 6
+                        Text {
+                            text: _collapsed ? "▸" : "▾"
+                            color: fgDim
+                            font.pixelSize: fontSm
+                            font.family: monoFamily
+                        }
+                        Text {
+                            text: rowModel ? rowModel.text : ""
+                            color: fg
+                            font.pixelSize: fontMd
+                            font.bold: true
+                        }
+                    }
+                }
+
+                Column {
+                    visible: !_collapsed
+                    width: dCol.width
+                    spacing: 2
+
+                    Text {
+                        width: parent.width
+                        visible: rowModel && rowModel.meta && rowModel.meta.rationale
+                                 && rowModel.meta.rationale.length > 0
+                        text: (rowModel && rowModel.meta && rowModel.meta.rationale) || ""
+                        color: fgDim
+                        wrapMode: Text.Wrap
+                        font.pixelSize: fontSm
+                    }
+
+                    Repeater {
+                        model: (rowModel && rowModel.meta && rowModel.meta.alternatives) || []
+                        delegate: Row {
+                            width: dCol.width
+                            spacing: 6
+                            Text {
+                                text: "·"
+                                color: fgMuted
+                                font.pixelSize: fontSm
+                                width: 8
+                            }
+                            Text {
+                                width: dCol.width - 14
+                                text: modelData.label
+                                      ? (modelData.label + (modelData.reason ? "  — " + modelData.reason : ""))
+                                      : (typeof modelData === "string" ? modelData : "")
+                                color: fgDim
+                                wrapMode: Text.Wrap
+                                font.pixelSize: fontSm
+                            }
+                        }
+                    }
+
+                    Row {
+                        visible: (rowModel && rowModel.meta && rowModel.meta.tags
+                                  && rowModel.meta.tags.length > 0) || false
+                        spacing: 4
+                        topPadding: 2
+                        Repeater {
+                            model: (rowModel && rowModel.meta && rowModel.meta.tags) || []
+                            delegate: Rectangle {
+                                color: codeBg
+                                radius: radiusSm
+                                implicitHeight: tagText.implicitHeight + 2
+                                implicitWidth: tagText.implicitWidth + 8
+                                Text {
+                                    id: tagText
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    color: fgDim
+                                    font.pixelSize: 10
+                                    font.family: monoFamily
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Compaction breadcrumb — dim single-line "≡ compacted N→M · archive".
+    Component {
+        id: compactionRow
+        Item {
+            property var rowModel: parent ? parent.rowModel : null
+            implicitHeight: cText.implicitHeight + rowPadY * 2
+            Text {
+                x: 6
+                y: rowPadY
+                text: "≡"
+                color: fgMuted
+                font.pixelSize: fontMd
+            }
+            Text {
+                id: cText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: gutter
+                anchors.rightMargin: 12
+                y: rowPadY
+                text: {
+                    var m = rowModel && rowModel.meta ? rowModel.meta : {}
+                    var head = qsTr("compacted")
+                    var tok = ""
+                    if (typeof m.tokensBefore === "number" || typeof m.tokensAfter === "number") {
+                        var b = m.tokensBefore != null ? m.tokensBefore.toLocaleString() : "?"
+                        var a = m.tokensAfter  != null ? m.tokensAfter.toLocaleString()  : "?"
+                        tok = "  " + b + " → " + a + " tok"
+                    }
+                    var arch = m.archivePath ? "  · " + m.archivePath : ""
+                    return head + tok + arch
+                }
+                color: fgMuted
+                wrapMode: Text.NoWrap
+                elide: Text.ElideMiddle
+                font.italic: true
+                font.pixelSize: fontSm
+                font.family: monoFamily
+            }
+        }
+    }
+
+    // Subagent span marker — a faint rule showing delegation start/end.
+    // All rows between a start/end pair already carry meta.agent via the
+    // MessagesModel, which the shared [agent] prefix logic picks up.
+    Component {
+        id: subagentRow
+        Item {
+            property var rowModel: parent ? parent.rowModel : null
+            property string _action: rowModel && rowModel.meta ? (rowModel.meta.action || "start") : "start"
+            property string _agent: rowModel && rowModel.meta ? (rowModel.meta.agent  || "")    : ""
+            implicitHeight: 18
+            Row {
+                anchors.left: parent.left
+                anchors.leftMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 6
+                Text {
+                    text: _action === "start" ? "┌" : "└"
+                    color: fgMuted
+                    font.family: monoFamily
+                    font.pixelSize: fontSm
+                }
+                Text {
+                    text: _action === "start"
+                        ? (qsTr("→ delegate") + "  [" + _agent + "]"
+                           + (rowModel && rowModel.text ? "  " + rowModel.text : ""))
+                        : (qsTr("← return") + "  [" + _agent + "]")
+                    color: fgDim
+                    font.pixelSize: fontSm
+                    font.italic: true
+                    font.family: monoFamily
                 }
             }
         }
