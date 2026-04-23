@@ -81,7 +81,9 @@ _HEADERS: dict[str, str] = {
     ),
     "memory": (
         "Read or write the project memory sidecar: design intent, parameters, "
-        "decisions, free-form notes. Pick a read or write op via 'op'."
+        "decisions, free-form notes. The 'kind' already encodes the op — use "
+        "'read', 'note.write', 'decision.record', or 'decision.list' directly. "
+        "Do NOT split into kind='note' + op='write'."
     ),
     "plan": (
         "Submit or update the milestone plan and lifecycle (emit_plan, "
@@ -123,13 +125,60 @@ async def _dispatch(verb: str, args: dict[str, Any]) -> dict:
     if rec is None:
         return _missing_kind_error(verb, kind_name)
 
+    # Fold well-known top-level aliases into params BEFORE the passthrough
+    # branch, so v1 translators (which read ``args.get("params")``) see the
+    # same flattened shape as native v2 providers. Without this, a call like
+    # ``cad_create(kind="document", name="Bracket")`` never passes ``name``
+    # to create_document's handler.
+    folded = dict(args) if args else {}
+    params = dict(folded.get("params") or {})
+    # ``code`` / ``label`` are top-level on ``cad_exec``; ``width`` / ``height``
+    # on ``cad_render``. Fold them along with the generic aliases so
+    # passthrough translators (which read ``args.get("params")``) see them.
+    for k in ("target", "name", "doc", "parent", "op", "code", "label", "width", "height"):
+        if k in folded and k not in params:
+            params[k] = folded[k]
+    # ``target`` is the v2-canonical "thing this verb operates on". v1
+    # handlers read it under kind-specific names (``feature``, ``sketch``,
+    # ``part_ref``, …). If the caller provided ``target`` and the kind's
+    # params_schema names one of those slots that's still empty, forward it.
+    _TARGET_ALIASES = ("feature", "sketch", "part_ref", "assembly", "object")
+    tgt = params.get("target")
+    if isinstance(tgt, str) and tgt:
+        for alias in _TARGET_ALIASES:
+            if alias in rec.params_schema and alias not in params:
+                params[alias] = tgt
+                break
+    folded["params"] = params
+
+    # Native: handler owns everything (validation, transaction, envelope).
+    # Dispatcher just resolves the doc, runs execute on the Qt thread for
+    # mutating verbs, and returns the handler's MCP content dict verbatim.
+    if rec.native:
+        return await _dispatch_native(rec, params)
+
     # Passthrough: execute is the v1 SDK tool's async handler. It already
     # handles its own preflight, transaction, and result shaping.
     if rec.passthrough:
         # Translate v2 args → v1 args. Providers register a translator as
         # ``execute`` that returns the v1 args dict. The actual v1 handler
         # is stored in ``summarize`` (overloaded for migration convenience).
-        v1_args = rec.execute(args)  # type: ignore[misc]
+        v1_args = rec.execute(folded)  # type: ignore[misc]
+        # Fast structured rejection for missing required params. Without this,
+        # the v1 tool body raises a bare KeyError whose repr ('feature',
+        # 'edges', …) doesn't tell the model what it should have sent. The
+        # registry already carries the expected shape — use it.
+        missing = _missing_required_params(rec, v1_args)
+        if missing:
+            return err(
+                f"Missing required params for {verb}/{kind_name}: {missing}.",
+                kind="missing_params",
+                verb=verb,
+                of_kind=kind_name,
+                expected_params=rec.params_schema,
+                received_keys=sorted(v1_args.keys()) if isinstance(v1_args, dict) else [],
+                missing=missing,
+            )
         v1_handler = rec.summarize  # the v1 SDK tool's .handler
         if v1_handler is None:
             return err(
@@ -139,14 +188,9 @@ async def _dispatch(verb: str, args: dict[str, Any]) -> dict:
         result = v1_handler(v1_args)  # type: ignore[misc]
         if inspect.isawaitable(result):
             result = await result
-        return result  # already MCP-shaped {"content": [...]}
+        return _augment_error_with_schema(result, rec)
 
-    params = dict(args.get("params") or {})
-    # Fold a few well-known top-level fields into params so providers don't
-    # have to dig them out: target, name, doc.
-    for k in ("target", "name", "doc", "parent", "op"):
-        if k in args and k not in params:
-            params[k] = args[k]
+    # ``params`` already populated above (shared with the passthrough branch).
 
     if rec.preflight is not None:
         msg = rec.preflight(params)
@@ -196,6 +240,103 @@ async def _dispatch(verb: str, args: dict[str, Any]) -> dict:
         )
 
 
+async def _dispatch_native(rec: registry.Kind, params: dict) -> dict:
+    """Native handler path. Validates against ``rec.model`` if present, then
+    calls ``rec.execute(doc, validated_params)`` on the GUI thread (inside a
+    transaction for mutating verbs). The handler returns the MCP content dict
+    directly — the dispatcher does not wrap it.
+    """
+    from .envelope import err_envelope
+
+    validated: dict = params
+    if rec.model is not None:
+        try:
+            instance = rec.model(**params)
+            validated = instance.model_dump(exclude_none=False)
+        except Exception as exc:
+            return err_envelope(
+                rec.kind,
+                error_kind="invalid_argument",
+                message=f"Invalid arguments for {rec.verb}:{rec.kind}.",
+                hint=str(exc),
+                extras={"expected_params": rec.params_schema, "received": sorted(params.keys())},
+            )
+
+    try:
+        doc_arg = validated.get("doc")
+        # Native handlers own their own transactions (they need to decide when
+        # to commit vs. abort based on preflight checks). The dispatcher only
+        # marshals to the Qt thread.
+        doc = resolve_doc(doc_arg) if doc_arg or _kind_needs_doc(rec) or rec.is_mutating else None
+
+        def work():
+            return rec.execute(doc, validated)
+
+        return on_gui(work)
+    except Exception as exc:
+        return err_envelope(
+            rec.kind,
+            error_kind="internal_error",
+            message=str(exc),
+            hint="Unhandled exception inside native handler — see traceback.",
+            extras={"traceback": traceback.format_exc(limit=6)},
+        )
+
+
+def _missing_required_params(rec: registry.Kind, v1_args: Any) -> list[str]:
+    """Return the list of schema-required keys absent from ``v1_args``.
+
+    Schema entries ending in ``?`` (e.g. ``"str?"``) are optional. The v2→v1
+    translator folds top-level aliases into ``v1_args`` before we get here,
+    so what's missing here is really missing.
+    """
+    if not isinstance(v1_args, dict):
+        return []
+    missing: list[str] = []
+    for key, type_hint in (rec.params_schema or {}).items():
+        if isinstance(type_hint, str) and type_hint.endswith("?"):
+            continue
+        if key not in v1_args or v1_args.get(key) in (None, ""):
+            # ``doc`` is optional at the call site even without a ``?`` —
+            # v1 tools default to App.ActiveDocument when it's missing.
+            if key == "doc":
+                continue
+            missing.append(key)
+    return missing
+
+
+def _augment_error_with_schema(result: Any, rec: registry.Kind) -> Any:
+    """If a passthrough v1 handler returned an error, append the kind's
+    param schema as a hint so the model can fix the call on the next turn.
+
+    The v1 tools return ``{"content": [{"type": "text", "text": "..."}]}``
+    where the text is either a success JSON (``{"ok": true, ...}``) or an
+    error JSON (``{"ok": false, "error": "...", "message": "...", ...}``).
+    We only touch the error branch, and we only add fields the v1 tool
+    didn't already set.
+    """
+    try:
+        if not isinstance(result, dict):
+            return result
+        content = result.get("content")
+        if not (isinstance(content, list) and content):
+            return result
+        block = content[0]
+        if not (isinstance(block, dict) and block.get("type") == "text"):
+            return result
+        import json as _json
+        body = _json.loads(block.get("text") or "{}")
+        if body.get("ok") is True:
+            return result
+        if "expected_params" not in body and rec.params_schema:
+            body["expected_params"] = rec.params_schema
+            body.setdefault("of_kind", rec.kind)
+            block["text"] = _json.dumps(body, default=str)
+        return result
+    except Exception:
+        return result
+
+
 def _kind_needs_doc(rec: registry.Kind) -> bool:
     """Heuristic: most kinds need an active doc; a few (e.g. inspect:documents) don't.
 
@@ -232,20 +373,32 @@ def _coerce_created(raw: Any) -> list[str]:
 # registry at import time. Adding a kind is one provider-file edit.
 
 def _make_verb_schema(verb: str) -> dict:
-    """All verbs share the same loose schema: kind + params + a few aliases."""
-    schema = {
-        "kind": str,
-        "params": dict,
+    """All verbs share the same loose schema: ``kind`` is the only required
+    property. Everything else (``params``, ``target``, ``name``, …) is
+    optional so the model can make minimal read-only calls like
+    ``cad_inspect(kind='document.list')`` without padding arguments.
+
+    We build the JSON Schema object directly because the SDK's dict-style
+    shorthand marks every listed property as required (see
+    ``claude_agent_sdk.__init__._build_schema``).
+    """
+    properties: dict[str, dict] = {
+        "kind": {"type": "string"},
+        "params": {"type": "object"},
+        "doc": {"type": "string"},
     }
     if verb in {"modify", "delete", "verify"}:
-        schema["target"] = str
-    if verb in {"create"}:
-        schema["name"] = str
-        schema["parent"] = str
+        properties["target"] = {"type": "string"}
+    if verb == "create":
+        properties["name"] = {"type": "string"}
+        properties["parent"] = {"type": "string"}
     if verb in {"memory", "plan", "io"}:
-        schema["op"] = str
-    schema["doc"] = str
-    return schema
+        properties["op"] = {"type": "string"}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": ["kind"],
+    }
 
 
 @tool(
@@ -298,7 +451,17 @@ async def cad_verify(args):
 @tool(
     "cad_render",
     registry.render_verb_description("render", _HEADERS["render"]),
-    {"width": int, "height": int, "doc": str, "kind": str, "params": dict},
+    {
+        "type": "object",
+        "properties": {
+            "width": {"type": "integer"},
+            "height": {"type": "integer"},
+            "doc": {"type": "string"},
+            "kind": {"type": "string"},
+            "params": {"type": "object"},
+        },
+        "required": [],
+    },
     annotations=_READ_ONLY,
 )
 async def cad_render(args):
@@ -339,7 +502,17 @@ async def cad_plan(args):
 @tool(
     "cad_exec",
     registry.render_verb_description("exec", _HEADERS["exec"]),
-    {"kind": str, "params": dict, "code": str, "label": str, "doc": str},
+    {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string"},
+            "params": {"type": "object"},
+            "code": {"type": "string"},
+            "label": {"type": "string"},
+            "doc": {"type": "string"},
+        },
+        "required": [],
+    },
 )
 async def cad_exec(args):
     if not args.get("kind"):
@@ -358,7 +531,6 @@ VERB_TOOLS: tuple = (
     cad_io,
     cad_memory,
     cad_plan,
-    cad_exec,
 )
 
 VERB_TOOL_NAMES: tuple[str, ...] = (
@@ -371,8 +543,14 @@ VERB_TOOL_NAMES: tuple[str, ...] = (
     "cad_io",
     "cad_memory",
     "cad_plan",
-    "cad_exec",
 )
+# ``cad_exec`` is intentionally NOT exposed as an MCP tool any more. The
+# ``exec`` verb and ``python.exec`` kind remain in the registry so internal
+# callers (and the harness) can still dispatch to ``_dispatch("exec", …)``,
+# but the model reaches for the SDK-built-in ``Bash`` tool instead for any
+# shell-level / subprocess escape hatch. We were seeing the agent fail
+# repeatedly on multi-line Python through cad_exec; Bash is the more
+# reliable tool the model already knows how to drive.
 
 
 def tool_funcs() -> list:

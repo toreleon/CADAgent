@@ -22,7 +22,6 @@ from ..tools import memory as _mem
 from ..tools import planning as _plan
 from ..tools.partdesign import body as _pd_body
 from ..tools.partdesign import sketch as _pd_sketch
-from ..tools.partdesign import pad_pocket as _pd_pp
 from ..tools.partdesign import dress_ups as _pd_du
 from ..tools.macros import plate as _macro_plate
 from ..tools.macros import holes as _macro_holes
@@ -144,24 +143,25 @@ passthrough(
     description="Create a fully-constrained sketch (DoF=0) from a structured profile.",
     params_schema={"plane": "str", "profile": "dict", "body": "str?", "name": "str?", "doc": "str?"},
 )
-passthrough(
-    verb="create", kind="partdesign.pad", v1_tool=_pd_pp.pad,
-    description="Extrude a sketch into a PartDesign::Pad.",
-    params_schema={"sketch": "str", "length": "float", "type_": "str?", "midplane": "bool?", "reversed": "bool?", "name": "str?", "doc": "str?"},
-)
-passthrough(
-    verb="create", kind="partdesign.pocket", v1_tool=_pd_pp.pocket,
-    description="Subtract a sketch extrusion (PartDesign::Pocket).",
-    params_schema={"sketch": "str", "length": "float?", "through_all": "bool?", "reversed": "bool?", "name": "str?", "doc": "str?"},
-)
+# NOTE: partdesign.pad and partdesign.pocket are now native providers in
+# ``providers/partdesign_native.py`` (uniform envelope, Pydantic validation,
+# real ``feat.Name`` in the created[] list, ``type`` instead of ``type_``).
 passthrough(
     verb="create", kind="partdesign.fillet", v1_tool=_pd_du.fillet,
-    description="Add a PartDesign::Fillet on edges (Feature.EdgeN refs).",
+    description=(
+        "Add a PartDesign::Fillet. Pass 'edges' (NOT 'target_edges') as a list "
+        "of 'FeatureName.EdgeN' refs — e.g. ['Pad.Edge1','Pad.Edge2']. Use "
+        "cad_inspect(kind='topology.preview', params={feature:...}) first to "
+        "find edge ids."
+    ),
     params_schema={"edges": "list[str]", "radius": "float", "name": "str?", "doc": "str?"},
 )
 passthrough(
     verb="create", kind="partdesign.chamfer", v1_tool=_pd_du.chamfer,
-    description="Add a PartDesign::Chamfer on edges.",
+    description=(
+        "Add a PartDesign::Chamfer. Pass 'edges' as a list of 'FeatureName.EdgeN' "
+        "refs and 'size' as the chamfer length in mm."
+    ),
     params_schema={"edges": "list[str]", "size": "float", "name": "str?", "doc": "str?"},
 )
 passthrough(
@@ -213,12 +213,23 @@ passthrough(
 )
 passthrough(
     verb="modify", kind="sketcher.geometry.add", v1_tool=_pd_sketch.add_sketch_geometry,
-    description="Add geometry (line, circle, arc, rectangle, polyline) to a sketch.",
+    description=(
+        "Add geometry to a Sketcher sketch. Inner params.kind selects the "
+        "primitive: 'line' {x1,y1,x2,y2}; 'circle' {center_x,center_y,radius}; "
+        "'arc' {center_x,center_y,radius,start,end}; "
+        "'rectangle' {x,y,width,height}; 'polyline' {points:[[x,y],...]}."
+    ),
     params_schema={"sketch": "str", "kind": "str", "params": "dict", "construction": "bool?", "doc": "str?"},
 )
 passthrough(
     verb="modify", kind="sketcher.constraint.add", v1_tool=_pd_sketch.add_sketch_constraint,
-    description="Add a sketch constraint (Coincident, Distance, Radius, Parallel, Tangent, …).",
+    description=(
+        "Add a sketch constraint. kind is one of: Coincident, PointOnObject, "
+        "Horizontal, Vertical, Parallel, Perpendicular, Tangent, Equal, Symmetric, "
+        "Distance, DistanceX, DistanceY, Radius, Diameter, Angle. refs is a list "
+        "of int ids returned by sketcher.geometry.add (e.g. [0, 1]). value is "
+        "required for dimensional constraints (Distance/Radius/Angle)."
+    ),
     params_schema={"sketch": "str", "kind": "str", "refs": "list[int]", "value": "float?", "doc": "str?"},
 )
 
