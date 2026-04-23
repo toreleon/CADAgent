@@ -91,3 +91,37 @@ INSTALL(FILES ${CADAgent_UI_QML} DESTINATION Mod/CADAgent/agent/ui/qml)
 INSTALL(FILES ${CADAgent_TOOLS} DESTINATION Mod/CADAgent/agent/tools)
 INSTALL(FILES ${CADAgent_TOOLS_PARTDESIGN} DESTINATION Mod/CADAgent/agent/tools/partdesign)
 INSTALL(FILES ${CADAgent_TOOLS_MACROS} DESTINATION Mod/CADAgent/agent/tools/macros)
+
+# ---------------------------------------------------------------------------
+# Live-LLM smoke tests (opt-in)
+#
+# Tests under tests/cadagent/ drive the agent end-to-end against the configured
+# LiteLLM / Anthropic proxy. Each test makes real model calls, so ctest must
+# not run them by default. To enable, set CADAGENT_LIVE_TESTS=1 in the env
+# when invoking ctest:
+#
+#     CADAGENT_LIVE_TESTS=1 \
+#     ANTHROPIC_BASE_URL=http://localhost:4141 \
+#     ANTHROPIC_API_KEY=... \
+#     ANTHROPIC_MODEL=gpt-5-mini \
+#     ctest --test-dir build/debug -R CADAgent_live
+#
+# When the env var is unset, the wrapper prints "skipped" and returns 0 so a
+# green ctest run is still green.
+# ---------------------------------------------------------------------------
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME CADAgent_live_tests
+        COMMAND ${CMAKE_COMMAND} -E env
+            FREECADCMD=$<TARGET_FILE_DIR:FreeCADMain>/FreeCADCmd
+            ${Python3_EXECUTABLE} -c
+            "import os,subprocess,sys; \
+sys.exit(0) if not os.environ.get('CADAGENT_LIVE_TESTS') else \
+sys.exit(subprocess.call([sys.executable,'-m','pytest','-m','live_llm','${CMAKE_SOURCE_DIR}/tests/cadagent']))"
+    )
+    set_tests_properties(CADAgent_live_tests PROPERTIES
+        LABELS "cadagent;live_llm"
+        TIMEOUT 600
+    )
+endif()
