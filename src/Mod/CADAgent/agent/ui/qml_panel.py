@@ -910,99 +910,94 @@ class QmlChatPanel(QtWidgets.QWidget):
 PANEL_WIDTH = 460
 
 
-def _enforce_right_toolbar(mw, tb) -> None:
-    """Pin the chat toolbar to the right toolbar area.
+def _claim_right_corners(mw) -> None:
+    """Give the right dock area both right corners so it spans full height.
 
-    ``QMainWindow.restoreState`` can re-place toolbars on startup based on
-    saved layout. We force right-area placement now, again after the event
-    queue drains, and on every ``topLevelChanged`` / area change.
+    By default the top/bottom dock areas claim the corners, which squeezes the
+    right dock between them. Reassigning both right corners to the right dock
+    area makes the CAD Agent panel run from just below the menu/toolbar to
+    the status bar — full editor height.
     """
-    tb.setMovable(False)
-    tb.setFloatable(False)
-    tb.setAllowedAreas(
-        QtCore.Qt.LeftToolBarArea | QtCore.Qt.RightToolBarArea
+    try:
+        mw.setCorner(QtCore.Qt.TopRightCorner, QtCore.Qt.RightDockWidgetArea)
+        mw.setCorner(QtCore.Qt.BottomRightCorner, QtCore.Qt.RightDockWidgetArea)
+    except Exception:
+        pass
+
+
+def _enforce_right_dock(mw, dock) -> None:
+    """Pin the chat dock to the right dock area, never floating.
+
+    ``QMainWindow.restoreState`` can re-place docks on startup based on saved
+    layout. We force right-area placement now and again after the event queue
+    drains so it survives late restores.
+    """
+    dock.setAllowedAreas(
+        QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea
     )
-    if tb.isFloating():
-        # QToolBar inherits isFloating; dragging it out makes it top-level.
-        tb.setParent(mw)
-    side_areas = (QtCore.Qt.LeftToolBarArea, QtCore.Qt.RightToolBarArea)
-    if mw.toolBarArea(tb) not in side_areas:
-        mw.addToolBar(QtCore.Qt.RightToolBarArea, tb)
+    # No Floatable and no Movable — the dock cannot be dragged into its own
+    # top-level window. Closable only, so users can still hide it.
+    dock.setFeatures(QtWidgets.QDockWidget.DockWidgetClosable)
+    if dock.isFloating():
+        dock.setFloating(False)
+    if mw.dockWidgetArea(dock) != QtCore.Qt.RightDockWidgetArea:
+        mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
 
     def _reassert():
-        if mw.toolBarArea(tb) not in side_areas:
-            mw.addToolBar(QtCore.Qt.RightToolBarArea, tb)
+        if dock.isFloating():
+            dock.setFloating(False)
+        if mw.dockWidgetArea(dock) != QtCore.Qt.RightDockWidgetArea:
+            mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+        _claim_right_corners(mw)
 
     QtCore.QTimer.singleShot(0, _reassert)
     QtCore.QTimer.singleShot(250, _reassert)
 
 
-class _PanelHost(QtWidgets.QWidget):
-    """Fixed-width container around :class:`QmlChatPanel` for the right toolbar.
+def get_or_create_dock() -> QtWidgets.QDockWidget:
+    """Return the chat dock widget, creating it on first call.
 
-    QToolBar sizes content to its ``sizeHint``; we set an explicit minimum
-    width so the chat column doesn't collapse. A QToolBar in RightToolBarArea
-    extends full height, constraining the top toolbar row to the area left
-    of this column — exactly the side-window layout we want.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setMinimumWidth(360)
-        self.setSizePolicy(
-            QtWidgets.QSizePolicy.Preferred,
-            QtWidgets.QSizePolicy.Expanding,
-        )
-        lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-        self.panel = QmlChatPanel(self)
-        lay.addWidget(self.panel)
-
-    def sizeHint(self):
-        return QtCore.QSize(PANEL_WIDTH, 600)
-
-
-def get_or_create_dock() -> QtWidgets.QToolBar:
-    """Return the chat host toolbar, creating it on first call.
-
-    Historically this was a QDockWidget; it is now a borderless QToolBar in
-    ``RightToolBarArea`` so the chat column extends full height — above the
-    top toolbar row — matching a true IDE side window rather than a
-    conventional dock. The function name and ``DOCK_OBJECT_NAME`` are kept
-    for call-site compatibility.
+    The dock lives in ``RightDockWidgetArea`` and claims both right corners of
+    the main window so the chat column runs full editor height (menu/toolbar
+    down to the status bar), IDE side-panel style.
     """
     mw = Gui.getMainWindow()
-    existing = mw.findChild(QtWidgets.QToolBar, DOCK_OBJECT_NAME)
+    existing = mw.findChild(QtWidgets.QDockWidget, DOCK_OBJECT_NAME)
     if existing is not None:
-        _enforce_right_toolbar(mw, existing)
+        _claim_right_corners(mw)
+        _enforce_right_dock(mw, existing)
         return existing
 
-    # If an older session persisted a QDockWidget with the same object name,
-    # tear it down so the toolbar replacement can take its place.
-    legacy = mw.findChild(QtWidgets.QDockWidget, DOCK_OBJECT_NAME)
-    if legacy is not None:
-        mw.removeDockWidget(legacy)
-        legacy.deleteLater()
+    # Older sessions persisted the host as a QToolBar — remove it so the
+    # QDockWidget can take its place.
+    legacy_tb = mw.findChild(QtWidgets.QToolBar, DOCK_OBJECT_NAME)
+    if legacy_tb is not None:
+        mw.removeToolBar(legacy_tb)
+        legacy_tb.deleteLater()
 
-    tb = QtWidgets.QToolBar(translate("CADAgent", "CAD Agent"), mw)
-    tb.setObjectName(DOCK_OBJECT_NAME)
-    # Hide the drag handle and extension button; the panel owns its chrome.
-    tb.setMovable(False)
-    tb.setFloatable(False)
-    tb.setContextMenuPolicy(QtCore.Qt.PreventContextMenu)
-    tb.setStyleSheet(
-        "QToolBar { border: 0; padding: 0; margin: 0; spacing: 0; }"
-        "QToolBar::separator { width: 0; height: 0; }"
-    )
+    _claim_right_corners(mw)
 
-    host = _PanelHost(tb)
-    QmlChatPanel._instance = host.panel
-    tb.addWidget(host)
+    dock = QtWidgets.QDockWidget(translate("CADAgent", "CAD Agent"), mw)
+    dock.setObjectName(DOCK_OBJECT_NAME)
+    # Hide the default title bar — the QML panel owns its own header chrome,
+    # and removing it lets the content start flush with the top of the right
+    # dock area (aligned with the bottom edge of the top toolbar row), giving
+    # the panel maximum vertical extent without a floating-window look.
+    dock.setTitleBarWidget(QtWidgets.QWidget(dock))
 
-    mw.addToolBar(QtCore.Qt.RightToolBarArea, tb)
-    _enforce_right_toolbar(mw, tb)
-    return tb
+    panel = QmlChatPanel(dock)
+    panel.setMinimumWidth(360)
+    QmlChatPanel._instance = panel
+    dock.setWidget(panel)
+
+    mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+    dock.setFloating(False)
+    try:
+        mw.resizeDocks([dock], [PANEL_WIDTH], QtCore.Qt.Horizontal)
+    except Exception:
+        dock.resize(PANEL_WIDTH, dock.height())
+    _enforce_right_dock(mw, dock)
+    return dock
 
 
 def get_panel():

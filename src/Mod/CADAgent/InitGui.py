@@ -89,7 +89,7 @@ def _install_agent_toolbar():
             import CADAgent
             CADAgent.register_commands()
             CADAgent.open_panel()
-            host = mw.findChild(QtWidgets.QToolBar, "CADAgentChatDock")
+            host = mw.findChild(QtWidgets.QDockWidget, "CADAgentChatDock")
             if host is not None:
                 if host.isHidden():
                     host.show()
