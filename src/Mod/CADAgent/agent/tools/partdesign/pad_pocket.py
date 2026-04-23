@@ -186,6 +186,3 @@ async def pocket(args):
 TOOL_FUNCS = [pad, pocket]
 TOOL_NAMES = ["pad", "pocket"]
 
-
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

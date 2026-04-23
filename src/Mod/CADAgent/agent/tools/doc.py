@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Document-level MCP tools: open/create/recompute/export."""
+"""Document-level custom tools: open/create/recompute/export."""
 
 from __future__ import annotations
 
@@ -14,12 +14,15 @@ except ImportError:
     _HAS_GUI = False
 
 from claude_agent_sdk import tool
+from mcp.types import ToolAnnotations
+
+_READ_ONLY = ToolAnnotations(readOnlyHint=True)
 
 from ..gui_thread import run_sync
 from ._shared import ok, err, on_gui, resolve_doc, summarise_object
 
 
-@tool("list_documents", "List the names of all open FreeCAD documents.", {})
+@tool("list_documents", "List the names of all open FreeCAD documents.", {}, annotations=_READ_ONLY)
 async def list_documents(args):
     def work():
         names = list(App.listDocuments().keys())
@@ -35,6 +38,7 @@ async def list_documents(args):
     "get_active_document",
     "Return the active document name and a short summary of its objects.",
     {},
+    annotations=_READ_ONLY,
 )
 async def get_active_document(args):
     def work():
@@ -71,6 +75,7 @@ async def create_document(args):
     "recompute_and_fit",
     "Recompute the document and fit the 3D view to all objects.",
     {"doc": str},
+    annotations=_READ_ONLY,
 )
 async def recompute_and_fit(args):
     def work():
@@ -191,5 +196,3 @@ TOOL_NAMES = [
 ]
 
 
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

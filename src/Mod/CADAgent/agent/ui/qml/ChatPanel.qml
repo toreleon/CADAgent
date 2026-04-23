@@ -13,7 +13,7 @@
 // Row roles: kind, text, meta.
 
 import QtQuick 2.15
-import QtQuick.Controls 2.15
+import QtQuick.Controls.Basic 2.15
 import QtQuick.Layouts 1.15
 
 Rectangle {
@@ -39,7 +39,7 @@ Rectangle {
     readonly property color codeBg: Qt.rgba(0.5, 0.5, 0.5, 0.12)
     readonly property color okColor: "#5ec270"
     readonly property color errColor: "#e05757"
-    readonly property string monoFamily: "Menlo, Consolas, DejaVu Sans Mono, monospace"
+    readonly property string monoFamily: "Menlo"
 
     ColumnLayout {
         anchors.fill: parent
@@ -62,6 +62,7 @@ Rectangle {
                     { symbol: "⚙", tip: qsTr("Configure LLM"),  action: "config" }
                 ]
                 delegate: ToolButton {
+                    required property var modelData
                     implicitWidth: 24
                     implicitHeight: 24
                     ToolTip.visible: hovered
@@ -73,7 +74,7 @@ Rectangle {
                     }
                     background: Rectangle { color: "transparent" }
                     contentItem: Text {
-                        text: modelData.symbol
+                        text: parent.modelData.symbol
                         color: parent.hovered ? fg : fgDim
                         font.pixelSize: 13
                         horizontalAlignment: Text.AlignHCenter

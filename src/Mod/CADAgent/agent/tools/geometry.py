@@ -8,6 +8,9 @@ import traceback
 import FreeCAD as App
 
 from claude_agent_sdk import tool
+from mcp.types import ToolAnnotations
+
+_READ_ONLY = ToolAnnotations(readOnlyHint=True)
 
 from ._shared import (
     ok,
@@ -24,6 +27,7 @@ from ._shared import (
     "list_objects",
     "List all objects in a document (active if doc is omitted).",
     {"doc": str},
+    annotations=_READ_ONLY,
 )
 async def list_objects(args):
     def work():
@@ -42,6 +46,7 @@ async def list_objects(args):
     "get_object",
     "Return properties and bounding-box summary for a named object.",
     {"name": str, "doc": str},
+    annotations=_READ_ONLY,
 )
 async def get_object(args):
     def work():
@@ -212,5 +217,3 @@ TOOL_NAMES = [
 ]
 
 
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

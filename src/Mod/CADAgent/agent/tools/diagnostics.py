@@ -23,6 +23,9 @@ except ImportError:
     _HAS_GUI = False
 
 from claude_agent_sdk import tool
+from mcp.types import ToolAnnotations
+
+_READ_ONLY = ToolAnnotations(readOnlyHint=True)
 
 from .. import errors
 from ..gui_thread import run_sync
@@ -45,6 +48,7 @@ from ._shared import ok, resolve_doc
             "height": {"type": "integer", "default": 300},
         },
     },
+    annotations=_READ_ONLY,
 )
 async def render_view(args):
     def work():
@@ -92,6 +96,7 @@ async def render_view(args):
     "verify_sketch",
     "Return DOF, malformed and conflicting constraint ids for a sketch.",
     {"sketch": str, "doc": str},
+    annotations=_READ_ONLY,
 )
 async def verify_sketch(args):
     def work():
@@ -120,6 +125,7 @@ async def verify_sketch(args):
     "verify_feature",
     "Return is_valid_solid, bbox, volume, and recompute errors for a feature.",
     {"feature": str, "doc": str},
+    annotations=_READ_ONLY,
 )
 async def verify_feature(args):
     def work():
@@ -158,6 +164,7 @@ async def verify_feature(args):
         "picking refs for fillet/chamfer/hole without a UI selection."
     ),
     {"feature": str, "doc": str, "max_items": int},
+    annotations=_READ_ONLY,
 )
 async def preview_topology(args):
     def work():
@@ -200,5 +207,3 @@ TOOL_FUNCS = [render_view, verify_sketch, verify_feature, preview_topology]
 TOOL_NAMES = ["render_view", "verify_sketch", "verify_feature", "preview_topology"]
 
 
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]

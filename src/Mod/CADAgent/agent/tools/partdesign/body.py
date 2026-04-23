@@ -111,6 +111,3 @@ async def set_datum(args):
 TOOL_FUNCS = [create_body, set_datum]
 TOOL_NAMES = ["create_body", "set_datum"]
 
-
-def allowed_tool_names() -> list[str]:
-    return [f"mcp__cad__{n}" for n in TOOL_NAMES]
