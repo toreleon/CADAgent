@@ -18,6 +18,7 @@ SET(CADAgent_AGENT
     agent/context.py
     agent/errors.py
     agent/gui_thread.py
+    agent/hooks.py
     agent/memory.py
     agent/permissions.py
     agent/prompts.py

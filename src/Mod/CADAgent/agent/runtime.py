@@ -61,6 +61,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     ResultMessage,
     StreamEvent,
     TextBlock,
@@ -70,6 +71,7 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
 )
 
+from . import hooks as cad_hooks
 from . import sessions as cad_sessions
 from . import tools as cad_tools
 from . import ui_bridge
@@ -230,6 +232,20 @@ class AgentRuntime:
         os.environ["ANTHROPIC_MODEL"] = model
         os.environ["ANTHROPIC_SMALL_FAST_MODEL"] = model
         server = create_sdk_mcp_server(name="cad", tools=cad_tools.tool_funcs())
+        # Verification loop (Phase 3): preflight rejects malformed tool inputs
+        # early; postflight surfaces recoverable errors and geometry warnings
+        # as additionalContext so the agent re-plans without us having to
+        # custom-wrap every tool. Hooks run in the SDK worker — they must not
+        # read FreeCAD.ActiveDocument or touch Qt state (see hooks.py).
+        cad_hook_matchers = [
+            HookMatcher(matcher="mcp__cad__.*", hooks=[cad_hooks.preflight_cad]),
+        ]
+        cad_post_matchers = [
+            HookMatcher(matcher="mcp__cad__.*", hooks=[cad_hooks.postflight_cad]),
+        ]
+        subagent_stop_matchers = [
+            HookMatcher(matcher=None, hooks=[cad_hooks.on_subagent_stop]),
+        ]
         options = ClaudeAgentOptions(
             model=model,
             system_prompt=CAD_SYSTEM_PROMPT,
@@ -239,6 +255,11 @@ class AgentRuntime:
             # the allow-list doesn't accidentally block it.
             allowed_tools=cad_tools.allowed_tool_names() + ["AskUserQuestion"],
             can_use_tool=make_can_use_tool(self._proxy),
+            hooks={
+                "PreToolUse": cad_hook_matchers,
+                "PostToolUse": cad_post_matchers,
+                "SubagentStop": subagent_stop_matchers,
+            },
             permission_mode=_resolve_permission_mode(),
             include_partial_messages=True,
             resume=self._resume_session_id,
