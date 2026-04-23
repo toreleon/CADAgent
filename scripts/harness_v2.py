@@ -218,7 +218,9 @@ def main() -> int:
         "doc": "HarnessDoc",
     })
     h.check("sketch_from_profile ok", r.get("ok") is True, str(r)[:400])
-    sketch_name = (r.get("created") or [None])[0] or r.get("primary")
+    # Native envelope: created is list[dict].
+    _sk0 = (r.get("created") or [None])[0]
+    sketch_name = _sk0.get("name") if isinstance(_sk0, dict) else (_sk0 or r.get("primary"))
 
     if sketch_name:
         # Verify DoF=0
@@ -495,6 +497,108 @@ def main() -> int:
             "fillet created[0] is dict with valid=True",
             isinstance(fillet0, dict) and fillet0.get("valid") is True,
             str(fillet0)[:200],
+        )
+
+    # -----------------------------------------------------------------
+    # sketch_from_profile native envelope — health + named_constraints
+    # -----------------------------------------------------------------
+    h.section("sketch_from_profile (native) envelope")
+    r = h.call("create", "partdesign.sketch_from_profile", params={
+        "plane": "XY",
+        "body": body_name,
+        "profile": {"kind": "rectangle", "width": 6, "height": 4, "center": [0, 0]},
+        "name": "ProfileTest",
+        "doc": "HarnessDoc",
+    })
+    h.check("sketch_from_profile (native) ok", r.get("ok") is True, str(r)[:400])
+    prof_sketch_dict = (r.get("created") or [None])[0]
+    prof_sketch_name = prof_sketch_dict.get("name") if isinstance(prof_sketch_dict, dict) else prof_sketch_dict
+    h.check(
+        "sketch_from_profile health.dof == 0",
+        isinstance(r.get("health"), dict) and r["health"].get("dof") == 0,
+        str(r.get("health"))[:200],
+    )
+    h.check(
+        "sketch_from_profile named_constraints populated",
+        isinstance(r.get("named_constraints"), dict) and len(r["named_constraints"]) > 0,
+        str(r.get("named_constraints"))[:200],
+    )
+
+    # -----------------------------------------------------------------
+    # Compositional path: create blank sketch → add line + circle → add
+    # constraints via both raw refs AND anchors → close.
+    # -----------------------------------------------------------------
+    h.section("sketcher.geometry/constraint + close (native)")
+    r = h.call("create", "partdesign.sketch", params={
+        "plane": "XZ", "body": body_name, "name": "CompTest", "doc": "HarnessDoc",
+    })
+    h.check("partdesign.sketch (blank) ok", r.get("ok") is True, str(r)[:400])
+    _bl = (r.get("created") or [None])[0]
+    blank_sketch = _bl.get("name") if isinstance(_bl, dict) else _bl
+    h.check(
+        "blank sketch envelope carries health",
+        isinstance(r.get("health"), dict) and "dof" in r["health"],
+        str(r.get("health"))[:200],
+    )
+
+    if blank_sketch:
+        # Add a line
+        r = h.call("modify", "sketcher.geometry.add", params={
+            "sketch": blank_sketch, "kind": "line",
+            "params": {"start": [0, 0], "end": [10, 0]},
+            "doc": "HarnessDoc",
+        })
+        h.check("geometry.add line ok", r.get("ok") is True, str(r)[:300])
+        line_ids = r.get("geo_ids") or []
+        h.check("geometry.add returns geo_ids", len(line_ids) >= 1, str(r)[:200])
+        h.check("geometry.add envelope has health.dof",
+                isinstance(r.get("health"), dict) and "dof" in r["health"],
+                str(r.get("health"))[:200])
+
+        # Add a horizontal constraint using the ergonomic 'anchors' form
+        line_id = line_ids[0]
+        r = h.call("modify", "sketcher.constraint.add", params={
+            "sketch": blank_sketch, "kind": "Horizontal",
+            "anchors": [{"geo_id": line_id, "pos": "edge"}],
+            "doc": "HarnessDoc",
+        })
+        h.check("constraint.add via anchors ok", r.get("ok") is True, str(r)[:300])
+        h.check(
+            "anchors translated to refs correctly",
+            r.get("refs_used") == [line_id],
+            f"got {r.get('refs_used')}",
+        )
+
+        # Raw refs still work (backward compatibility)
+        r = h.call("modify", "sketcher.constraint.add", params={
+            "sketch": blank_sketch, "kind": "DistanceX",
+            "refs": [line_id, 1, line_id, 2], "value": 10.0,
+            "doc": "HarnessDoc",
+        })
+        h.check("constraint.add via raw refs ok", r.get("ok") is True, str(r)[:300])
+
+        # Neither refs nor anchors → invalid_argument from Pydantic validator
+        r = h.call("modify", "sketcher.constraint.add", params={
+            "sketch": blank_sketch, "kind": "Horizontal",
+            "doc": "HarnessDoc",
+        })
+        err_field = r.get("error")
+        err_kind = err_field.get("kind") if isinstance(err_field, dict) else err_field
+        h.check(
+            "constraint.add without refs/anchors → invalid_argument",
+            r.get("ok") is False and err_kind == "invalid_argument",
+            str(r)[:300],
+        )
+
+        # close returns envelope with health
+        r = h.call("verify", "sketcher.close", params={
+            "sketch": blank_sketch, "doc": "HarnessDoc",
+        })
+        h.check("sketcher.close ok", r.get("ok") is True, str(r)[:300])
+        h.check(
+            "close returns health dict",
+            isinstance(r.get("health"), dict) and "dof" in r["health"],
+            str(r.get("health"))[:200],
         )
 
     # -----------------------------------------------------------------

@@ -20,7 +20,6 @@ from ..tools import geometry as _geom
 from ..tools import diagnostics as _diag
 from ..tools import memory as _mem
 from ..tools import planning as _plan
-from ..tools.partdesign import sketch as _pd_sketch
 from ..tools.macros import plate as _macro_plate
 from ..tools.macros import holes as _macro_holes
 
@@ -78,11 +77,7 @@ passthrough(
     description="Check solid validity, bbox, volume, face/edge counts of a feature.",
     params_schema={"feature": "str", "doc": "str?"}, read_only=True,
 )
-passthrough(
-    verb="verify", kind="sketcher.close", v1_tool=_pd_sketch.close_sketch,
-    description="Solve a sketch and report final DoF + bad constraint ids.",
-    params_schema={"sketch": "str", "doc": "str?"},
-)
+# sketcher.close is now native (providers/sketch_native.py).
 passthrough(
     verb="verify", kind="document.recompute", v1_tool=_doc.recompute_and_fit,
     description="Recompute a document and fit the 3D view to all objects.",
@@ -127,16 +122,8 @@ passthrough(
     params_schema={"radius1": "float", "radius2": "float", "height": "float", "name": "str?", "doc": "str?"},
 )
 # partdesign.body is now native (providers/partdesign_shell.py).
-passthrough(
-    verb="create", kind="partdesign.sketch", v1_tool=_pd_sketch.create_sketch,
-    description="Create a blank Sketcher sketch on a plane (XY/XZ/YZ or Feature.FaceN).",
-    params_schema={"plane": "str", "body": "str?", "name": "str?", "doc": "str?"},
-)
-passthrough(
-    verb="create", kind="partdesign.sketch_from_profile", v1_tool=_pd_sketch.sketch_from_profile,
-    description="Create a fully-constrained sketch (DoF=0) from a structured profile.",
-    params_schema={"plane": "str", "profile": "dict", "body": "str?", "name": "str?", "doc": "str?"},
-)
+# partdesign.sketch + partdesign.sketch_from_profile are now native
+# (providers/sketch_native.py).
 # NOTE: partdesign.pad and partdesign.pocket are now native providers in
 # ``providers/partdesign_native.py`` (uniform envelope, Pydantic validation,
 # real ``feat.Name`` in the created[] list, ``type`` instead of ``type_``).
@@ -186,27 +173,9 @@ passthrough(
     description="Write a parameter to the sidecar AND the Parameters spreadsheet.",
     params_schema={"name": "str", "value": "float", "unit": "str?", "note": "str?", "doc": "str?"},
 )
-passthrough(
-    verb="modify", kind="sketcher.geometry.add", v1_tool=_pd_sketch.add_sketch_geometry,
-    description=(
-        "Add geometry to a Sketcher sketch. Inner params.kind selects the "
-        "primitive: 'line' {x1,y1,x2,y2}; 'circle' {center_x,center_y,radius}; "
-        "'arc' {center_x,center_y,radius,start,end}; "
-        "'rectangle' {x,y,width,height}; 'polyline' {points:[[x,y],...]}."
-    ),
-    params_schema={"sketch": "str", "kind": "str", "params": "dict", "construction": "bool?", "doc": "str?"},
-)
-passthrough(
-    verb="modify", kind="sketcher.constraint.add", v1_tool=_pd_sketch.add_sketch_constraint,
-    description=(
-        "Add a sketch constraint. kind is one of: Coincident, PointOnObject, "
-        "Horizontal, Vertical, Parallel, Perpendicular, Tangent, Equal, Symmetric, "
-        "Distance, DistanceX, DistanceY, Radius, Diameter, Angle. refs is a list "
-        "of int ids returned by sketcher.geometry.add (e.g. [0, 1]). value is "
-        "required for dimensional constraints (Distance/Radius/Angle)."
-    ),
-    params_schema={"sketch": "str", "kind": "str", "refs": "list[int]", "value": "float?", "doc": "str?"},
-)
+# sketcher.geometry.add + sketcher.constraint.add are now native
+# (providers/sketch_native.py). The native constraint.add accepts either the
+# legacy `refs: list[int]` or the ergonomic `anchors: list[{geo_id, pos}]`.
 
 
 # ---- delete -----------------------------------------------------------------
