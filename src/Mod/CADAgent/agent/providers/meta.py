@@ -70,8 +70,7 @@ def _describe(doc, params: dict[str, Any]) -> dict:
             "params_schema": rec.params_schema,
             "json_schema": _model_json_schema(rec.model),
             "example": rec.example,
-            "implementation": "native" if rec.native
-                              else ("passthrough" if rec.passthrough else "legacy"),
+            "implementation": "native" if rec.native else "legacy",
         },
     }
     return {"content": [{"type": "text", "text": json.dumps(body, default=str)}]}

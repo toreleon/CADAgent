@@ -301,31 +301,10 @@ def main() -> int:
     # -----------------------------------------------------------------
     # missing required params → structured error with expected_params
     # -----------------------------------------------------------------
-    h.section("passthrough missing-params preflight")
-    # Use a still-passthrough kind (part.cylinder) to exercise the
-    # missing-params path. pad/pocket/body/fillet/chamfer/datum moved to the
-    # native provider which reports missing fields via Pydantic as
-    # kind='invalid_argument' (covered by the native tests below).
-    r = h.call("create", "part.cylinder", params={"radius": 1.0, "doc": "HarnessDoc"})
-    err_field = r.get("error") if isinstance(r, dict) else None
-    err_kind = err_field.get("kind") if isinstance(err_field, dict) else err_field
-    h.check(
-        "missing-params error has kind=missing_params",
-        r.get("ok") is False and err_kind == "missing_params",
-        str(r)[:300],
-    )
-    h.check(
-        "missing-params error includes expected_params",
-        isinstance(r.get("expected_params"), dict) and "height" in (r.get("expected_params") or {}),
-        str(r)[:300],
-    )
-    h.check(
-        "missing-params error lists 'height' as missing",
-        "height" in (r.get("missing") or []),
-        str(r)[:300],
-    )
-
-    # Same failure mode on the new native path, different taxonomy.
+    h.section("native missing-params (invalid_argument)")
+    # The legacy `missing_params` preflight lived on the passthrough path;
+    # passthrough is gone, so Pydantic-backed native kinds surface missing
+    # fields as invalid_argument with the validator message as hint.
     r = h.call("create", "partdesign.pad", params={"length": 2.0, "doc": "HarnessDoc"})
     err_field = r.get("error")
     err_kind = err_field.get("kind") if isinstance(err_field, dict) else err_field

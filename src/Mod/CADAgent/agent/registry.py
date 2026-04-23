@@ -82,17 +82,11 @@ class Kind:
     postflight_hints: tuple[PostHint, ...] = field(default=())
     # Read-only override (some verbs are mixed: cad.memory has read+write ops).
     read_only: bool | None = None
-    # Passthrough mode: ``execute`` is an async v1 SDK tool handler
-    # (``async def handler(args) -> {"content": [...]})``. The dispatcher
-    # awaits it and returns the result verbatim, skipping its own
-    # transaction wrapping, summarize, and ok() wrap. Used during the v1→v2
-    # migration so we don't rewrite 39 tool bodies.
-    passthrough: bool = False
     # Native mode: ``execute`` is itself the full handler, takes (doc, params),
     # is responsible for its own transaction / envelope / error shape, and
     # returns an MCP content dict. The dispatcher skips preflight/transaction/
-    # summarize machinery — the handler owns everything. Used by the PR1+
-    # native providers that want Pydantic validation and the uniform envelope.
+    # summarize machinery — the handler owns everything. Used by the native
+    # providers that want Pydantic validation and the uniform envelope.
     native: bool = False
     # Optional Pydantic model used to validate params before ``execute`` runs
     # (native kinds only). Providing this lets ``schema.describe`` emit a real
@@ -123,7 +117,6 @@ def register(
     summarize: Callable[[Any, Any], dict] | None = None,
     postflight_hints: Iterable[PostHint] = (),
     read_only: bool | None = None,
-    passthrough: bool = False,
     native: bool = False,
     model: Any = None,
     example: dict[str, Any] | None = None,
@@ -133,8 +126,6 @@ def register(
         raise ValueError(f"Unknown verb {verb!r}. Must be one of {VERBS}.")
     if not kind or not isinstance(kind, str):
         raise ValueError(f"kind must be a non-empty string (got {kind!r}).")
-    if passthrough and native:
-        raise ValueError(f"{verb}:{kind} cannot be both passthrough and native.")
     bucket = _REGISTRY[verb]
     if kind in bucket:
         raise ValueError(f"Duplicate registration: verb={verb} kind={kind}")
@@ -148,7 +139,6 @@ def register(
         summarize=summarize,
         postflight_hints=tuple(postflight_hints),
         read_only=read_only,
-        passthrough=passthrough,
         native=native,
         model=model,
         example=example,

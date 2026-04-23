@@ -157,40 +157,7 @@ async def _dispatch(verb: str, args: dict[str, Any]) -> dict:
     if rec.native:
         return await _dispatch_native(rec, params)
 
-    # Passthrough: execute is the v1 SDK tool's async handler. It already
-    # handles its own preflight, transaction, and result shaping.
-    if rec.passthrough:
-        # Translate v2 args → v1 args. Providers register a translator as
-        # ``execute`` that returns the v1 args dict. The actual v1 handler
-        # is stored in ``summarize`` (overloaded for migration convenience).
-        v1_args = rec.execute(folded)  # type: ignore[misc]
-        # Fast structured rejection for missing required params. Without this,
-        # the v1 tool body raises a bare KeyError whose repr ('feature',
-        # 'edges', …) doesn't tell the model what it should have sent. The
-        # registry already carries the expected shape — use it.
-        missing = _missing_required_params(rec, v1_args)
-        if missing:
-            return err(
-                f"Missing required params for {verb}/{kind_name}: {missing}.",
-                kind="missing_params",
-                verb=verb,
-                of_kind=kind_name,
-                expected_params=rec.params_schema,
-                received_keys=sorted(v1_args.keys()) if isinstance(v1_args, dict) else [],
-                missing=missing,
-            )
-        v1_handler = rec.summarize  # the v1 SDK tool's .handler
-        if v1_handler is None:
-            return err(
-                f"passthrough kind {kind_name!r} has no v1 handler",
-                kind="internal_error",
-            )
-        result = v1_handler(v1_args)  # type: ignore[misc]
-        if inspect.isawaitable(result):
-            result = await result
-        return _augment_error_with_schema(result, rec)
-
-    # ``params`` already populated above (shared with the passthrough branch).
+    # ``params`` already populated above.
 
     if rec.preflight is not None:
         msg = rec.preflight(params)
@@ -267,7 +234,25 @@ async def _dispatch_native(rec: registry.Kind, params: dict) -> dict:
         # Native handlers own their own transactions (they need to decide when
         # to commit vs. abort based on preflight checks). The dispatcher only
         # marshals to the Qt thread.
-        doc = resolve_doc(doc_arg) if doc_arg or _kind_needs_doc(rec) or rec.is_mutating else None
+        # Resolve an active doc if possible, but tolerate absence — kinds
+        # like ``create:document`` have no doc yet and the v1 handler
+        # creates one itself. Explicit ``doc_arg`` still errors if missing.
+        if doc_arg:
+            doc = resolve_doc(doc_arg)
+        elif _kind_needs_doc(rec) or rec.is_mutating:
+            try:
+                doc = resolve_doc(None)
+            except ValueError:
+                doc = None
+        else:
+            doc = None
+
+        # Async native handler: await directly. The handler is responsible
+        # for its own Qt-thread marshalling (typically by calling the v1
+        # tool's ``.handler`` which internally uses run_sync). Keeping this
+        # off on_gui() avoids nesting run_sync within itself.
+        if inspect.iscoroutinefunction(rec.execute):
+            return await rec.execute(doc, validated)
 
         def work():
             return rec.execute(doc, validated)
@@ -281,60 +266,6 @@ async def _dispatch_native(rec: registry.Kind, params: dict) -> dict:
             hint="Unhandled exception inside native handler — see traceback.",
             extras={"traceback": traceback.format_exc(limit=6)},
         )
-
-
-def _missing_required_params(rec: registry.Kind, v1_args: Any) -> list[str]:
-    """Return the list of schema-required keys absent from ``v1_args``.
-
-    Schema entries ending in ``?`` (e.g. ``"str?"``) are optional. The v2→v1
-    translator folds top-level aliases into ``v1_args`` before we get here,
-    so what's missing here is really missing.
-    """
-    if not isinstance(v1_args, dict):
-        return []
-    missing: list[str] = []
-    for key, type_hint in (rec.params_schema or {}).items():
-        if isinstance(type_hint, str) and type_hint.endswith("?"):
-            continue
-        if key not in v1_args or v1_args.get(key) in (None, ""):
-            # ``doc`` is optional at the call site even without a ``?`` —
-            # v1 tools default to App.ActiveDocument when it's missing.
-            if key == "doc":
-                continue
-            missing.append(key)
-    return missing
-
-
-def _augment_error_with_schema(result: Any, rec: registry.Kind) -> Any:
-    """If a passthrough v1 handler returned an error, append the kind's
-    param schema as a hint so the model can fix the call on the next turn.
-
-    The v1 tools return ``{"content": [{"type": "text", "text": "..."}]}``
-    where the text is either a success JSON (``{"ok": true, ...}``) or an
-    error JSON (``{"ok": false, "error": "...", "message": "...", ...}``).
-    We only touch the error branch, and we only add fields the v1 tool
-    didn't already set.
-    """
-    try:
-        if not isinstance(result, dict):
-            return result
-        content = result.get("content")
-        if not (isinstance(content, list) and content):
-            return result
-        block = content[0]
-        if not (isinstance(block, dict) and block.get("type") == "text"):
-            return result
-        import json as _json
-        body = _json.loads(block.get("text") or "{}")
-        if body.get("ok") is True:
-            return result
-        if "expected_params" not in body and rec.params_schema:
-            body["expected_params"] = rec.params_schema
-            body.setdefault("of_kind", rec.kind)
-            block["text"] = _json.dumps(body, default=str)
-        return result
-    except Exception:
-        return result
 
 
 def _kind_needs_doc(rec: registry.Kind) -> bool:
