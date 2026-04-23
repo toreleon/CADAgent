@@ -19,6 +19,7 @@ except ImportError:
     _HAS_GUI = False
 
 from . import memory as project_memory
+from . import orchestrator
 from .gui_thread import run_sync
 
 
@@ -417,6 +418,19 @@ def build_context_snapshot() -> str:
 
 def wrap_user_message(user_text: str) -> str:
     snap = build_context_snapshot()
-    if not snap:
+    # Orchestrator preamble: tells the agent whether this turn is planning,
+    # executing, or reviewing. Rendered from the current plan state in the
+    # per-doc sidecar — no Python-side state machine required.
+    try:
+        orch = run_sync(lambda: orchestrator.preamble_for(App.ActiveDocument), timeout=2.0)
+    except Exception:
+        orch = ""
+    parts = []
+    if snap:
+        parts.append(f"<context>\n{snap}\n</context>")
+    if orch:
+        parts.append(f"<orchestrator>\n{orch}\n</orchestrator>")
+    parts.append(f"<user>\n{user_text}\n</user>")
+    if len(parts) == 1:
         return user_text
-    return f"<context>\n{snap}\n</context>\n\n<user>\n{user_text}\n</user>"
+    return "\n\n".join(parts)

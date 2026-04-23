@@ -20,6 +20,7 @@ SET(CADAgent_AGENT
     agent/gui_thread.py
     agent/hooks.py
     agent/memory.py
+    agent/orchestrator.py
     agent/permissions.py
     agent/prompts.py
     agent/sessions.py
