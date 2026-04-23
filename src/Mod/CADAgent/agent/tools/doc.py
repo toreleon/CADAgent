@@ -9,7 +9,9 @@ import FreeCAD as App
 
 try:
     import FreeCADGui as Gui
-    _HAS_GUI = True
+    # FreeCADCmd exposes a stub FreeCADGui without doCommand/ActiveDocument.
+    # Gate on a real GUI method so headless falls back to plain ``exec``.
+    _HAS_GUI = hasattr(Gui, "doCommand")
 except ImportError:
     _HAS_GUI = False
 
@@ -161,7 +163,13 @@ async def run_python(args):
                 for line in code.splitlines():
                     Gui.doCommand(line)
             else:
-                exec(code, {"App": App, "FreeCAD": App})
+                ns: dict = {"App": App, "FreeCAD": App}
+                try:
+                    import Part  # type: ignore
+                    ns["Part"] = Part
+                except ImportError:
+                    pass
+                exec(code, ns)
             if tx_owner is not None:
                 tx_owner.commitTransaction()
                 tx_owner.recompute()

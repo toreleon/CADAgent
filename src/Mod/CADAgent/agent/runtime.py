@@ -68,6 +68,7 @@ from claude_agent_sdk import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
     create_sdk_mcp_server,
 )
 
@@ -304,7 +305,11 @@ class AgentRuntime:
         # the allow-list doesn't accidentally block it.
         # "Agent" is the SDK's built-in delegation tool the orchestrator
         # uses to invoke specialist subagents (reviewer, sketcher, …).
-        allowed = cad_verbs.allowed_tool_names() + ["AskUserQuestion", "Agent"]
+        # "Bash" replaces cad_exec as the escape hatch — the model uses it
+        # for out-of-process work (validate STEP files, run FreeCADCmd
+        # subprocesses, read/write scratch files) without the fragility we
+        # hit when exec'ing multi-line Python inside the running FreeCAD.
+        allowed = cad_verbs.allowed_tool_names() + ["AskUserQuestion", "Agent", "Bash"]
         options = ClaudeAgentOptions(
             model=model,
             system_prompt=CAD_SYSTEM_PROMPT,
@@ -399,6 +404,20 @@ class AgentRuntime:
                         block.content,
                         getattr(block, "is_error", False),
                     )
+        elif isinstance(msg, UserMessage):
+            # The SDK delivers tool results to us wrapped in a UserMessage
+            # whose content is a list of ToolResultBlocks (one per tool call
+            # the assistant just emitted). Fan them out to the panel so the
+            # chat UI can close each tool row with OK / ERR.
+            content = getattr(msg, "content", None)
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, ToolResultBlock):
+                        self._proxy.toolResult.emit(
+                            getattr(block, "tool_use_id", ""),
+                            block.content,
+                            bool(getattr(block, "is_error", False) or False),
+                        )
         elif isinstance(msg, ResultMessage):
             sid = getattr(msg, "session_id", None)
             if sid:

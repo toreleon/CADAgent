@@ -68,6 +68,7 @@ def reviewer_agent() -> AgentDefinition:
         prompt=REVIEWER_PROMPT,
         tools=_verb_names(_REVIEWER_VERB_NAMES),
         permissionMode="default",
+        model="inherit",
     )
 
 
@@ -82,6 +83,7 @@ def sketcher_agent() -> AgentDefinition:
         prompt=SKETCHER_PROMPT,
         tools=_verb_names(_SKETCHER_VERB_NAMES),
         permissionMode="default",
+        model="inherit",
     )
 
 
@@ -95,6 +97,7 @@ def assembler_agent() -> AgentDefinition:
         prompt=_ASSEMBLER_PROMPT,
         tools=_verb_names(_ASSEMBLER_VERB_NAMES),
         permissionMode="default",
+        model="inherit",
     )
 
 

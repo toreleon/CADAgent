@@ -51,14 +51,53 @@ def resolve_sketch(doc, name):
     return obj
 
 
+def _ensure_body_origin(doc, body):
+    """Make sure ``body`` has an Origin with the three datum planes.
+
+    FreeCAD's GUI path auto-creates the Origin feature when a Body is added,
+    but in headless (FreeCADCmd) the Body can land without one. Create it on
+    demand so sketch_from_profile / create_sketch work uniformly.
+    """
+    origin = getattr(body, "Origin", None)
+    if origin is not None and list(getattr(origin, "OriginFeatures", []) or []):
+        return origin
+    origin = doc.addObject("App::Origin", f"{body.Name}_Origin")
+    # Populate the three planes + three axes as OriginFeatures.
+    features = []
+    for plane_key in ("XY_Plane", "XZ_Plane", "YZ_Plane"):
+        p = doc.addObject("App::Plane", plane_key)
+        p.Label = plane_key
+        features.append(p)
+    for axis_key, direction in (
+        ("X_Axis", (1, 0, 0)),
+        ("Y_Axis", (0, 1, 0)),
+        ("Z_Axis", (0, 0, 1)),
+    ):
+        a = doc.addObject("App::Line", axis_key)
+        a.Label = axis_key
+        features.append(a)
+    origin.OriginFeatures = features
+    body.Origin = origin
+    doc.recompute()
+    return origin
+
+
 def resolve_support(doc, body, plane_spec: str):
     """Return the (feature, subnames) tuple to use as AttachmentSupport."""
     if plane_spec in PLANE_MAP:
-        origin = body.Origin
+        origin = _ensure_body_origin(doc, body)
         plane = origin.getObject(PLANE_MAP[plane_spec])
         if plane is None:
+            # Match by Name/Label prefix to tolerate numeric suffixes FreeCAD
+            # appends when multiple bodies live in one document (e.g.
+            # ``XY_Plane001``), and by Role (``XY_Plane``) when available.
+            target = PLANE_MAP[plane_spec]
             for p in origin.OriginFeatures:
-                if p.Name.endswith(PLANE_MAP[plane_spec]):
+                if p.Name == target or p.Name.startswith(target):
+                    plane = p
+                    break
+                role = getattr(p, "Role", None)
+                if role == target:
                     plane = p
                     break
         if plane is None:

@@ -13,7 +13,10 @@ import FreeCAD as App
 
 try:
     import FreeCADGui as Gui  # noqa: F401
-    _HAS_GUI = True
+    # FreeCADCmd exposes a stub FreeCADGui module that lacks ActiveDocument /
+    # Selection etc. Gate on a real GUI attribute so headless invocations
+    # skip the "re-present the view" path cleanly.
+    _HAS_GUI = hasattr(Gui, "ActiveDocument")
 except ImportError:
     _HAS_GUI = False
 

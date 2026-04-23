@@ -25,9 +25,11 @@ if [[ ! -x "$FC_BIN" ]]; then
     exit 1
 fi
 
-MOD_DIR="$HERE/build/debug/Mod/CADAgent"
+# Prefer source tree so edits are picked up without a rebuild; fall back to
+# the built copy when running from a packaged install.
+MOD_DIR="$HERE/src/Mod/CADAgent"
 if [[ ! -d "$MOD_DIR" ]]; then
-    MOD_DIR="$HERE/src/Mod/CADAgent"
+    MOD_DIR="$HERE/build/debug/Mod/CADAgent"
 fi
 
 # Pass the concatenated prompt as a single argv[1] to the embedded script.

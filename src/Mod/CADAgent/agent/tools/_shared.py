@@ -55,8 +55,14 @@ def ok(payload: dict) -> dict:
 
 
 def err(message: str, **extras) -> dict:
-    """Legacy error path: prefer errors.fail(kind, ...) for new callers."""
-    payload = errors.fail("internal_error", message=message, **extras)
+    """Legacy error path: prefer errors.fail(kind, ...) for new callers.
+
+    Callers may pass ``kind=<taxonomy>`` to override the default
+    ``internal_error`` kind — pop it out of extras so it doesn't collide with
+    the first positional argument of ``errors.fail``.
+    """
+    kind = extras.pop("kind", "internal_error")
+    payload = errors.fail(kind, message=message, **extras)
     try:
         body = json.loads(payload["content"][0]["text"])
         _LAST_RESULT["summary"] = {
