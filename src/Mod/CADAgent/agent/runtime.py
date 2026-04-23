@@ -72,10 +72,12 @@ from claude_agent_sdk import (
 )
 
 from . import hooks as cad_hooks
+from . import providers as cad_providers
 from . import sessions as cad_sessions
 from . import subagents as cad_subagents
 from . import tools as cad_tools
 from . import ui_bridge
+from . import verbs as cad_verbs
 from .context import wrap_user_message
 from .permissions import make_can_use_tool
 from .prompts import CAD_SYSTEM_PROMPT
@@ -113,6 +115,22 @@ def _resolve_base_url() -> str:
 def _resolve_model() -> str:
     params = App.ParamGet(PARAM_PATH)
     return params.GetString("Model", "claude-opus-4-7") or "claude-opus-4-7"
+
+
+_MCP_CAD_PREFIX = "mcp__cad__"
+
+
+def _strip_cad_prefix(name: str) -> str:
+    """Strip the SDK's ``mcp__cad__`` tool-name prefix for UI display.
+
+    The Claude Agent SDK's in-process MCP server routes tool calls via the
+    ``mcp__<server>__<tool>`` naming convention; that prefix is structural
+    and cannot be removed at the SDK level. We only hide it where it would
+    otherwise show up to the user (chat panel, permission prompts).
+    """
+    if isinstance(name, str) and name.startswith(_MCP_CAD_PREFIX):
+        return name[len(_MCP_CAD_PREFIX):]
+    return name
 
 
 def _resolve_permission_mode() -> str:
@@ -192,7 +210,7 @@ class _PanelProxy(QtCore.QObject):
         when the user clicks Apply or Reject."""
         try:
             self._panel.request_permission_threadsafe(
-                tool_name, tool_input, cf_future
+                _strip_cad_prefix(tool_name), tool_input, cf_future
             )
         except Exception as exc:
             if not cf_future.done():
@@ -263,7 +281,7 @@ class AgentRuntime:
         # model so every request routes to something the proxy recognises.
         os.environ["ANTHROPIC_MODEL"] = model
         os.environ["ANTHROPIC_SMALL_FAST_MODEL"] = model
-        server = create_sdk_mcp_server(name="cad", tools=cad_tools.tool_funcs())
+        server = create_sdk_mcp_server(name="cad", tools=cad_verbs.tool_funcs())
         # Verification loop (Phase 3): preflight rejects malformed tool inputs
         # early; postflight surfaces recoverable errors and geometry warnings
         # as additionalContext so the agent re-plans without us having to
@@ -286,7 +304,7 @@ class AgentRuntime:
         # the allow-list doesn't accidentally block it.
         # "Agent" is the SDK's built-in delegation tool the orchestrator
         # uses to invoke specialist subagents (reviewer, sketcher, …).
-        allowed = cad_tools.allowed_tool_names() + ["AskUserQuestion", "Agent"]
+        allowed = cad_verbs.allowed_tool_names() + ["AskUserQuestion", "Agent"]
         options = ClaudeAgentOptions(
             model=model,
             system_prompt=CAD_SYSTEM_PROMPT,
@@ -361,8 +379,13 @@ class AgentRuntime:
                     # duplicating it on the final non-partial AssistantMessage.
                     pass
                 elif isinstance(block, ToolUseBlock):
+                    # Strip the SDK's structural ``mcp__cad__`` prefix so the
+                    # chat UI shows the friendly name (``cad_create`` instead
+                    # of ``mcp__cad__cad_create``). The full name is kept for
+                    # internal bookkeeping (mark_tool, permission prompts).
+                    display_name = _strip_cad_prefix(block.name)
                     self._proxy.toolUse.emit(
-                        getattr(block, "id", ""), block.name, block.input
+                        getattr(block, "id", ""), display_name, block.input
                     )
                     try:
                         cad_tools.mark_tool(block.name)

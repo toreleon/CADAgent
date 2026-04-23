@@ -23,9 +23,23 @@ SET(CADAgent_AGENT
     agent/orchestrator.py
     agent/permissions.py
     agent/prompts.py
+    agent/registry.py
     agent/sessions.py
     agent/subagents.py
     agent/ui_bridge.py
+    agent/verbs.py
+)
+
+SET(CADAgent_PROVIDERS
+    agent/providers/__init__.py
+    agent/providers/_helpers.py
+    agent/providers/v1_passthrough.py
+    agent/providers/draft.py
+    agent/providers/assembly.py
+    agent/providers/io_extras.py
+    agent/providers/mesh.py
+    agent/providers/sheet_metal.py
+    agent/providers/techdraw.py
 )
 
 SET(CADAgent_UI
@@ -68,6 +82,7 @@ SET(CADAgent_TOOLS_MACROS
 SET(CADAgent_SRCS
     ${CADAgent_TOP}
     ${CADAgent_AGENT}
+    ${CADAgent_PROVIDERS}
     ${CADAgent_UI}
     ${CADAgent_UI_QML}
     ${CADAgent_TOOLS}
@@ -90,6 +105,7 @@ ENDIF (BUILD_GUI)
 
 INSTALL(FILES ${CADAgent_TOP} ${CADAgent_QRC_SRCS} DESTINATION Mod/CADAgent)
 INSTALL(FILES ${CADAgent_AGENT} DESTINATION Mod/CADAgent/agent)
+INSTALL(FILES ${CADAgent_PROVIDERS} DESTINATION Mod/CADAgent/agent/providers)
 INSTALL(FILES ${CADAgent_UI} DESTINATION Mod/CADAgent/agent/ui)
 INSTALL(FILES ${CADAgent_UI_QML} DESTINATION Mod/CADAgent/agent/ui/qml)
 INSTALL(FILES ${CADAgent_TOOLS} DESTINATION Mod/CADAgent/agent/tools)

@@ -2,170 +2,105 @@
 """Specialist subagents for the CAD Agent orchestrator.
 
 Subagents are declared as ``AgentDefinition`` values and attached to the
-runtime's ``ClaudeAgentOptions.agents``. The main agent delegates to them via
-the SDK's built-in ``Agent`` tool — pass the subagent name + a prompt and
-the SDK spins up a fresh conversation with only that subagent's tool list
-in scope.
+runtime's ``ClaudeAgentOptions.agents``. The main agent delegates to them
+via the SDK's built-in ``Agent`` tool — pass the subagent name + a prompt
+and the SDK spins up a fresh conversation with only that subagent's tool
+list in scope.
 
-Important SDK constraints (as of claude_agent_sdk 0.1.63):
+SDK constraints (claude_agent_sdk 0.1.63):
 
 - Subagent invocations run serially inside one ``query()``.
 - Subagents do NOT inherit parent conversation memory. The orchestrator
   must pass any relevant decision / milestone context in the Agent-tool
   prompt.
-- ``tools=[...]`` is a literal list of full tool names. No wildcards are
-  honoured, so we enumerate from the canonical registry in ``tools/``.
+- ``tools=[...]`` is a literal list of full tool names; no wildcards.
 - Nested subagents are not supported; stay flat.
-
-This module defines the factories; ``runtime.py`` calls them when it builds
-options so the tool list is always in sync with the live registry.
 """
 
 from __future__ import annotations
 
 from claude_agent_sdk import AgentDefinition
 
-from . import tools as cad_tools
 from .prompts import REVIEWER_PROMPT, SKETCHER_PROMPT
 
 
-# Read-only tools the Reviewer may use. Enumerated by name so the SDK's
-# static tool check accepts the subagent definition — wildcards would be
-# nicer but the runtime rejects them.
-_REVIEWER_READONLY_NAMES: tuple[str, ...] = (
-    # doc / structure
-    "list_documents",
-    "get_active_document",
-    "list_objects",
-    "get_object",
-    "get_selection",
-    # parameters + memory (read only)
-    "get_parameters",
-    "read_project_memory",
-    "list_decisions",
-    "get_active_milestone",
-    # verification / inspection
-    "verify_sketch",
-    "verify_feature",
-    "preview_topology",
-    "render_view",
+# Verb allow-lists per subagent. Each subagent sees the same 10-verb
+# surface as the orchestrator; its system prompt scopes it to the
+# appropriate kinds. Kind-prefix filtering at the dispatcher level is a
+# future enhancement; today, scoping is prompt-enforced.
+_REVIEWER_VERB_NAMES: tuple[str, ...] = (
+    "cad_inspect", "cad_verify", "cad_render", "cad_memory",
+)
+_SKETCHER_VERB_NAMES: tuple[str, ...] = (
+    "cad_create", "cad_modify", "cad_verify", "cad_inspect", "cad_memory",
+)
+_ASSEMBLER_VERB_NAMES: tuple[str, ...] = (
+    "cad_create", "cad_modify", "cad_delete", "cad_inspect", "cad_verify",
 )
 
 
-def _as_mcp_names(bare_names: tuple[str, ...]) -> list[str]:
-    """Promote bare tool names to the ``mcp__cad__`` form the SDK expects."""
-    registered = set(cad_tools.tool_names())
-    out: list[str] = []
-    for n in bare_names:
-        if n in registered:
-            out.append(f"mcp__cad__{n}")
-    return out
+def _verb_names(bare: tuple[str, ...]) -> list[str]:
+    return [f"mcp__cad__{n}" for n in bare]
 
 
-def reviewer_tool_names() -> list[str]:
-    """Full tool names granted to the Reviewer subagent."""
-    return _as_mcp_names(_REVIEWER_READONLY_NAMES)
-
-
-# Tools the Sketcher may use. Sketch creation + constraint solving, plus
-# the read-only tools it needs to reason about the active Body and surface.
-_SKETCHER_TOOL_NAMES: tuple[str, ...] = (
-    # sketch creation + editing
-    "create_sketch",
-    "add_sketch_geometry",
-    "add_sketch_constraint",
-    "close_sketch",
-    "sketch_from_profile",
-    # verification (closes its own loop)
-    "verify_sketch",
-    # read helpers so it can pick a plane / face
-    "list_objects",
-    "get_object",
-    "get_selection",
-    "get_active_document",
-    "read_project_memory",
+_ASSEMBLER_PROMPT = (
+    "You are CAD Assembler, embedded in FreeCAD 1.2. Your job is to compose "
+    "existing Bodies / Parts into a fully-constrained Assembly using the "
+    "cad_create / cad_modify verbs with assembly.* kinds. Follow the "
+    "assembly-bottom-up skill: create the assembly, reference each part, "
+    "ground one, add joints (fixed / revolute / slider / ball / distance) "
+    "until the solver reports DoF=0 for rigid assemblies or the intended "
+    "DoF for mechanisms. Return control with one result message summarising "
+    "joints added and any unresolved constraints.\n\n"
+    "You MUST NOT create new Bodies or new geometry — parts must already "
+    "exist. If the brief lists parts that aren't in the document, fail the "
+    "turn and ask."
 )
-
-
-def sketcher_tool_names() -> list[str]:
-    """Full tool names granted to the Sketcher subagent."""
-    return _as_mcp_names(_SKETCHER_TOOL_NAMES)
 
 
 def reviewer_agent() -> AgentDefinition:
-    """Build the Reviewer AgentDefinition from the live tool registry.
-
-    The orchestrator invokes this subagent after completing a milestone (or
-    at any point the user asks for a design review). It cannot mutate the
-    document — its tool set is filtered to read-only operations.
-    """
     return AgentDefinition(
         description=(
-            "Read-only CAD design reviewer. Invokes verify_feature, "
-            "render_view, and topology queries to produce a pass/fail "
-            "report on the current document state. Cannot modify geometry."
+            "Read-only CAD design reviewer. Runs cad_verify / cad_inspect / "
+            "cad_render / cad_memory to produce a pass-fail report on the "
+            "current document. Cannot modify geometry."
         ),
         prompt=REVIEWER_PROMPT,
-        tools=reviewer_tool_names(),
+        tools=_verb_names(_REVIEWER_VERB_NAMES),
         permissionMode="default",
     )
 
 
-def assembler_agent() -> AgentDefinition | None:
-    """Stub for the future Assembler specialist — Phase 8 placeholder.
-
-    Assembly support needs a tool surface that doesn't exist yet: joints,
-    constraints between bodies, cross-body parametric references. Until
-    those tools land, this factory returns ``None`` so ``build_subagents()``
-    skips it cleanly. The shape is left here so the next contributor can
-    drop in the real implementation without re-wiring the orchestrator.
-
-    When building the real definition, expected tool allow-list:
-
-        "create_assembly_constraint", "set_joint", "reference_part",
-        "set_placement", "list_objects", "get_object", "verify_feature",
-        "get_selection", "get_active_document", "read_project_memory"
-
-    and the description should warn the orchestrator that the Assembler
-    mutates inter-body relationships — call it only from milestones whose
-    tool_hints explicitly mention assembly.
-    """
-    return None
-
-
 def sketcher_agent() -> AgentDefinition:
-    """Build the Sketcher AgentDefinition from the live tool registry.
-
-    The orchestrator delegates to this specialist when a milestone's
-    tool_hints include sketch creation / constraint solving, or whenever the
-    main agent hits a DoF>0 wall. The Sketcher closes its own loop —
-    iterating ``add_sketch_constraint`` + ``verify_sketch`` until DoF=0 —
-    and returns control with a single result message.
-    """
     return AgentDefinition(
         description=(
             "2D sketch specialist. Creates and constrains sketches inside "
-            "the active PartDesign Body until DoF=0. Use this agent when a "
-            "milestone involves sketch_from_profile / add_sketch_constraint "
-            "loops or when a sketch-based feature fails due to an "
-            "underconstrained profile."
+            "the active PartDesign Body until DoF=0. Use when a milestone "
+            "needs sketch_from_profile or an add-constraint loop, or when "
+            "a pad/pocket just failed due to an underconstrained profile."
         ),
         prompt=SKETCHER_PROMPT,
-        tools=sketcher_tool_names(),
+        tools=_verb_names(_SKETCHER_VERB_NAMES),
+        permissionMode="default",
+    )
+
+
+def assembler_agent() -> AgentDefinition:
+    return AgentDefinition(
+        description=(
+            "Assembly specialist. Composes existing Bodies into a FreeCAD "
+            "Assembly with fixed/revolute/slider/ball/distance joints. Use "
+            "when a milestone mentions assembly, joint, or mechanism."
+        ),
+        prompt=_ASSEMBLER_PROMPT,
+        tools=_verb_names(_ASSEMBLER_VERB_NAMES),
         permissionMode="default",
     )
 
 
 def build_subagents() -> dict[str, AgentDefinition]:
-    """Return the full subagent map to wire into ClaudeAgentOptions.agents.
-
-    New specialists plug in here. assembler_agent() is a placeholder that
-    returns None until the assembly tool surface is built — filtered out
-    below so the map only contains real definitions.
-    """
-    all_specialists = {
+    return {
         "reviewer": reviewer_agent(),
         "sketcher": sketcher_agent(),
         "assembler": assembler_agent(),
     }
-    return {name: agent for name, agent in all_specialists.items() if agent is not None}
