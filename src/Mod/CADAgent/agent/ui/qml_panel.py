@@ -907,20 +907,102 @@ class QmlChatPanel(QtWidgets.QWidget):
         self.bridge.register_ask(ask_id, cf_future, list(questions or []))
 
 
-def get_or_create_dock() -> QtWidgets.QDockWidget:
+PANEL_WIDTH = 460
+
+
+def _enforce_right_toolbar(mw, tb) -> None:
+    """Pin the chat toolbar to the right toolbar area.
+
+    ``QMainWindow.restoreState`` can re-place toolbars on startup based on
+    saved layout. We force right-area placement now, again after the event
+    queue drains, and on every ``topLevelChanged`` / area change.
+    """
+    tb.setMovable(False)
+    tb.setFloatable(False)
+    tb.setAllowedAreas(
+        QtCore.Qt.LeftToolBarArea | QtCore.Qt.RightToolBarArea
+    )
+    if tb.isFloating():
+        # QToolBar inherits isFloating; dragging it out makes it top-level.
+        tb.setParent(mw)
+    side_areas = (QtCore.Qt.LeftToolBarArea, QtCore.Qt.RightToolBarArea)
+    if mw.toolBarArea(tb) not in side_areas:
+        mw.addToolBar(QtCore.Qt.RightToolBarArea, tb)
+
+    def _reassert():
+        if mw.toolBarArea(tb) not in side_areas:
+            mw.addToolBar(QtCore.Qt.RightToolBarArea, tb)
+
+    QtCore.QTimer.singleShot(0, _reassert)
+    QtCore.QTimer.singleShot(250, _reassert)
+
+
+class _PanelHost(QtWidgets.QWidget):
+    """Fixed-width container around :class:`QmlChatPanel` for the right toolbar.
+
+    QToolBar sizes content to its ``sizeHint``; we set an explicit minimum
+    width so the chat column doesn't collapse. A QToolBar in RightToolBarArea
+    extends full height, constraining the top toolbar row to the area left
+    of this column — exactly the side-window layout we want.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(360)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.panel = QmlChatPanel(self)
+        lay.addWidget(self.panel)
+
+    def sizeHint(self):
+        return QtCore.QSize(PANEL_WIDTH, 600)
+
+
+def get_or_create_dock() -> QtWidgets.QToolBar:
+    """Return the chat host toolbar, creating it on first call.
+
+    Historically this was a QDockWidget; it is now a borderless QToolBar in
+    ``RightToolBarArea`` so the chat column extends full height — above the
+    top toolbar row — matching a true IDE side window rather than a
+    conventional dock. The function name and ``DOCK_OBJECT_NAME`` are kept
+    for call-site compatibility.
+    """
     mw = Gui.getMainWindow()
-    existing = mw.findChild(QtWidgets.QDockWidget, DOCK_OBJECT_NAME)
+    existing = mw.findChild(QtWidgets.QToolBar, DOCK_OBJECT_NAME)
     if existing is not None:
+        _enforce_right_toolbar(mw, existing)
         return existing
 
-    dock = QtWidgets.QDockWidget(translate("CADAgent", "CAD Agent"), mw)
-    dock.setObjectName(DOCK_OBJECT_NAME)
-    panel = QmlChatPanel(dock)
-    QmlChatPanel._instance = panel
-    dock.setWidget(panel)
-    mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
-    dock.resize(460, dock.height())
-    return dock
+    # If an older session persisted a QDockWidget with the same object name,
+    # tear it down so the toolbar replacement can take its place.
+    legacy = mw.findChild(QtWidgets.QDockWidget, DOCK_OBJECT_NAME)
+    if legacy is not None:
+        mw.removeDockWidget(legacy)
+        legacy.deleteLater()
+
+    tb = QtWidgets.QToolBar(translate("CADAgent", "CAD Agent"), mw)
+    tb.setObjectName(DOCK_OBJECT_NAME)
+    # Hide the drag handle and extension button; the panel owns its chrome.
+    tb.setMovable(False)
+    tb.setFloatable(False)
+    tb.setContextMenuPolicy(QtCore.Qt.PreventContextMenu)
+    tb.setStyleSheet(
+        "QToolBar { border: 0; padding: 0; margin: 0; spacing: 0; }"
+        "QToolBar::separator { width: 0; height: 0; }"
+    )
+
+    host = _PanelHost(tb)
+    QmlChatPanel._instance = host.panel
+    tb.addWidget(host)
+
+    mw.addToolBar(QtCore.Qt.RightToolBarArea, tb)
+    _enforce_right_toolbar(mw, tb)
+    return tb
 
 
 def get_panel():

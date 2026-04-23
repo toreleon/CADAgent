@@ -89,11 +89,11 @@ def _install_agent_toolbar():
             import CADAgent
             CADAgent.register_commands()
             CADAgent.open_panel()
-            dock = mw.findChild(QtWidgets.QDockWidget, "CADAgentChatDock")
-            if dock is not None:
-                if dock.isHidden():
-                    dock.show()
-                dock.raise_()
+            host = mw.findChild(QtWidgets.QToolBar, "CADAgentChatDock")
+            if host is not None:
+                if host.isHidden():
+                    host.show()
+                host.raise_()
         except Exception as exc:
             FreeCAD.Console.PrintError(
                 f"CAD Agent: toggle failed: {exc}\n{traceback.format_exc()}\n"

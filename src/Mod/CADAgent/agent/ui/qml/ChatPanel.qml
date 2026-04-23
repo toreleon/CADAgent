@@ -59,7 +59,7 @@ Rectangle {
             // Current-agent indicator. "main" is hidden to reduce noise;
             // subagent names render as "[reviewer]" in accent.
             Text {
-                text: bridge.currentAgent === "main" ? "" : "[" + bridge.currentAgent + "]"
+                text: !bridge || bridge.currentAgent === "main" ? "" : "[" + bridge.currentAgent + "]"
                 visible: text.length > 0
                 color: accent
                 font.pixelSize: 10
@@ -69,7 +69,7 @@ Rectangle {
             // Milestone progress pip. Empty string hides it. The runtime
             // updates this via upsert_milestone(), so no QML-side plumbing.
             Text {
-                text: bridge.milestoneSummary
+                text: bridge ? bridge.milestoneSummary : ""
                 visible: text.length > 0
                 color: fgDim
                 font.pixelSize: 10
@@ -95,14 +95,14 @@ Rectangle {
                 }
                 contentItem: Text {
                     text: {
-                        var m = bridge.permissionMode
+                        var m = bridge ? bridge.permissionMode : "default"
                         if (m === "bypassPermissions") return "⛨ bypass"
                         if (m === "acceptEdits")       return "✎ auto"
                         if (m === "plan")              return "◆ plan"
                         return "● default"
                     }
-                    color: bridge.permissionMode === "bypassPermissions" ? errColor
-                         : (bridge.permissionMode === "plan" ? accent : fgDim)
+                    color: (bridge && bridge.permissionMode === "bypassPermissions") ? errColor
+                         : ((bridge && bridge.permissionMode === "plan") ? accent : fgDim)
                     font.pixelSize: 10
                     font.family: monoFamily
                     horizontalAlignment: Text.AlignHCenter
@@ -207,8 +207,8 @@ Rectangle {
         // ── Thinking ticker ──────────────────────────────────────────
         Item {
             Layout.fillWidth: true
-            Layout.preferredHeight: bridge.busy ? 16 : 0
-            visible: bridge.busy
+            Layout.preferredHeight: (bridge && bridge.busy) ? 16 : 0
+            visible: bridge && bridge.busy
             Text {
                 anchors.left: parent.left
                 anchors.leftMargin: gutter
@@ -295,7 +295,7 @@ Rectangle {
 
                     Button {
                         id: stopBtn
-                        visible: bridge.busy
+                        visible: bridge && bridge.busy
                         implicitWidth: 22
                         implicitHeight: 22
                         ToolTip.visible: hovered
@@ -318,7 +318,7 @@ Rectangle {
 
                     Button {
                         id: sendBtn
-                        visible: !bridge.busy
+                        visible: !bridge || !bridge.busy
                         enabled: input.text.trim().length > 0
                         implicitWidth: 22
                         implicitHeight: 22

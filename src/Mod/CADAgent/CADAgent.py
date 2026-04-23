@@ -189,20 +189,27 @@ def _make_configure_llm_command():
 
 
 def register_commands() -> None:
-    """Register the CAD Agent Gui commands (idempotent)."""
-    try:
-        Gui.addCommand("CADAgent_OpenPanel", _make_open_panel_command()())
-    except Exception:
-        # addCommand raises if the command is already registered; ignore.
-        App.Console.PrintLog(
-            f"CADAgent: addCommand skipped\n{traceback.format_exc()}"
-        )
-    try:
-        Gui.addCommand("CADAgent_ConfigureLLM", _make_configure_llm_command()())
-    except Exception:
-        App.Console.PrintLog(
-            f"CADAgent: addCommand skipped\n{traceback.format_exc()}"
-        )
+    """Register the CAD Agent Gui commands (idempotent).
+
+    FreeCAD's ``Gui.addCommand`` does not raise on duplicate names — it logs
+    ``duplicate command …`` to the console. Check the existing registry so
+    re-entry from multiple InitGui paths stays silent.
+    """
+    existing = set(Gui.listCommands())
+    if "CADAgent_OpenPanel" not in existing:
+        try:
+            Gui.addCommand("CADAgent_OpenPanel", _make_open_panel_command()())
+        except Exception:
+            App.Console.PrintLog(
+                f"CADAgent: addCommand skipped\n{traceback.format_exc()}"
+            )
+    if "CADAgent_ConfigureLLM" not in existing:
+        try:
+            Gui.addCommand("CADAgent_ConfigureLLM", _make_configure_llm_command()())
+        except Exception:
+            App.Console.PrintLog(
+                f"CADAgent: addCommand skipped\n{traceback.format_exc()}"
+            )
 
 
 def open_panel() -> None:
