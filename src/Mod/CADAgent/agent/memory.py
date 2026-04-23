@@ -58,7 +58,13 @@ import os
 import tempfile
 from typing import Iterable
 
-import FreeCAD as App
+# FreeCAD is optional: the standalone CLI drives this module by passing a
+# stub doc handle whose ``FileName`` attribute is always set, so we never
+# reach the ``App.getUserAppDataDir()`` fallback.
+try:
+    import FreeCAD as App  # type: ignore[import-not-found]
+except ImportError:
+    App = None  # type: ignore[assignment]
 
 
 SCHEMA_VERSION = 2
@@ -180,6 +186,11 @@ def sidecar_path(doc) -> str:
     if file_name:
         base, _ext = os.path.splitext(file_name)
         return base + ".cadagent.json"
+    if App is None:
+        raise RuntimeError(
+            "Doc has no FileName and FreeCAD is not importable — "
+            "CLI callers must save the .FCStd first so the sidecar can live next to it."
+        )
     unsaved_dir = os.path.join(App.getUserAppDataDir(), "CADAgent", "unsaved")
     os.makedirs(unsaved_dir, exist_ok=True)
     return os.path.join(unsaved_dir, f"{doc.Name}.cadagent.json")

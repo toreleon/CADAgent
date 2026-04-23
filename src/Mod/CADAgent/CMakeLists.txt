@@ -16,6 +16,7 @@ SET(CADAgent_AGENT
     agent/__init__.py
     agent/runtime.py
     agent/context.py
+    agent/envelope.py
     agent/errors.py
     agent/gui_thread.py
     agent/hooks.py
@@ -32,13 +33,17 @@ SET(CADAgent_AGENT
 
 SET(CADAgent_PROVIDERS
     agent/providers/__init__.py
-    agent/providers/_helpers.py
-    agent/providers/v1_passthrough.py
-    agent/providers/draft.py
+    agent/providers/_v1_adapter.py
     agent/providers/assembly.py
+    agent/providers/bulk.py
+    agent/providers/draft.py
     agent/providers/io_extras.py
     agent/providers/mesh.py
+    agent/providers/meta.py
+    agent/providers/partdesign_native.py
+    agent/providers/partdesign_shell.py
     agent/providers/sheet_metal.py
+    agent/providers/sketch_native.py
     agent/providers/techdraw.py
 )
 

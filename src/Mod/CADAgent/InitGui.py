@@ -65,10 +65,10 @@ def _auto_open_panel():
 
 
 def _install_agent_toolbar():
-    """Add a persistent 'Agent' button to the main window toolbar.
+    """Add a persistent 'Agent' button to the main window's status bar.
 
-    The button is visible in every workbench, so the chat is always one click
-    away, like Copilot's activity-bar icon in VS Code.
+    The button sits next to FreeCAD's built-in console/report-view toggles so
+    the chat is always one click away, like Copilot's status-bar icon in VS Code.
     """
     import traceback
     try:
@@ -78,8 +78,10 @@ def _install_agent_toolbar():
     mw = FreeCADGui.getMainWindow()
     if mw is None:
         return
-    existing = mw.findChild(QtWidgets.QToolBar, "CADAgentPersistentToolbar")
-    if existing is not None:
+    if mw.findChild(QtWidgets.QToolButton, "CADAgentStatusBarButton") is not None:
+        return
+    sb = mw.statusBar()
+    if sb is None:
         return
 
     # Inline the toggle callback so it survives FreeCAD's InitGui exec context
@@ -99,8 +101,6 @@ def _install_agent_toolbar():
                 f"CAD Agent: toggle failed: {exc}\n{traceback.format_exc()}\n"
             )
 
-    tb = QtWidgets.QToolBar(translate("CADAgent", "CAD Agent"), mw)
-    tb.setObjectName("CADAgentPersistentToolbar")
     act = QtGui.QAction(translate("CADAgent", "Agent"), mw)
     act.setObjectName("CADAgent_OpenChatAction")
     act.setToolTip(translate("CADAgent", "Open CAD Agent chat (Ctrl+Alt+A)"))
@@ -110,10 +110,17 @@ def _install_agent_toolbar():
     except Exception:
         pass
     act.triggered.connect(_toggle)
-    tb.addAction(act)
 
-    tb.setToolButtonStyle(_QtCore.Qt.ToolButtonTextBesideIcon)
-    mw.addToolBar(_QtCore.Qt.TopToolBarArea, tb)
+    btn = QtWidgets.QToolButton(sb)
+    btn.setObjectName("CADAgentStatusBarButton")
+    btn.setDefaultAction(act)
+    btn.setToolButtonStyle(_QtCore.Qt.ToolButtonTextBesideIcon)
+    btn.setAutoRaise(True)
+
+    # Place next to the console/report-view toggles on the right side of the
+    # status bar. addPermanentWidget right-aligns; insert so the button sits
+    # just before the existing toggles rather than after them.
+    sb.addPermanentWidget(btn, 0)
 
 
 # Open the chat dock automatically at FreeCAD startup (Copilot-style),

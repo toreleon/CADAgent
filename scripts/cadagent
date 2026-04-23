@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# cadagent — standalone Option A entrypoint. Runs ClaudeSDKClient in plain
+# Python (no FreeCAD import). Drives FreeCAD via the built-in Bash tool
+# invoking FreeCADCmd as subprocesses.
+#
+# Usage:
+#   scripts/cadagent "create a 20x10x5mm plate at /tmp/plate.FCStd"
+#
+# Requires:
+#   - ANTHROPIC_API_KEY set (or ANTHROPIC_BASE_URL for a proxy)
+#   - pixi env installed (provides claude-agent-sdk)
+#   - build/debug/bin/FreeCADCmd available (the agent invokes it via Bash)
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="$HERE/.pixi/envs/default/bin/python"
+
+if [[ ! -x "$PY" ]]; then
+    echo "cadagent: pixi python not found at $PY — run 'pixi install' first." >&2
+    exit 2
+fi
+
+# Put the CAD Agent module on PYTHONPATH so ``import agent.cli.runtime``
+# works without installing the package. Also keep $HOME redirected so any
+# FreeCADCmd the agent spawns gets the hermetic config tree.
+export PYTHONPATH="$HERE/src/Mod/CADAgent:${PYTHONPATH:-}"
+export FC_HOME="${FC_HOME:-$HERE/.fc-home}"
+mkdir -p "$FC_HOME/.local/share" "$FC_HOME/.config"
+
+exec "$PY" -m agent.cli.runtime "$@"
