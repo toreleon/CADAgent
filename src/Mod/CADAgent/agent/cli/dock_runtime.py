@@ -49,6 +49,7 @@ from claude_agent_sdk import (
 from .. import gui_thread, ui_bridge
 from ..permissions import make_can_use_tool
 from . import dock_tools, runtime as cli_runtime
+from .worker_client import WorkerClient, WorkerCrashedError
 
 
 _MCP_PREFIX = "mcp__cad__"
@@ -210,6 +211,8 @@ class DockRuntime:
         self._ready = threading.Event()
         self._current_future: concurrent.futures.Future | None = None
         self._workspace_path: str | None = None
+        self._worker: WorkerClient | None = None
+        self._heartbeat_task: asyncio.Task | None = None
 
     # --- worker thread -------------------------------------------------
 
@@ -270,6 +273,46 @@ class DockRuntime:
         )
         self.client = ClaudeSDKClient(options=options)
         await self.client.__aenter__()
+
+    async def _ensure_worker(self) -> WorkerClient:
+        """Spawn the CAD worker subprocess lazily on first demand."""
+        if self._worker is not None and self._worker.is_alive:
+            return self._worker
+        if self._worker is None:
+            self._worker = WorkerClient()
+        await self._worker.ensure_alive()
+        if self._heartbeat_task is None or self._heartbeat_task.done():
+            self._heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(), name="cad-worker-heartbeat"
+            )
+        return self._worker
+
+    async def _heartbeat_loop(self) -> None:
+        """Ping the worker every 30s; restart + notify on crash."""
+        while self._worker is not None:
+            try:
+                await asyncio.sleep(30.0)
+            except asyncio.CancelledError:
+                return
+            worker = self._worker
+            if worker is None:
+                return
+            alive = False
+            try:
+                alive = await worker.ping()
+            except Exception:
+                alive = False
+            if not alive:
+                self._proxy.error.emit("CAD worker crashed — restarting")
+                try:
+                    await worker.close()
+                except Exception:
+                    pass
+                try:
+                    await worker.ensure_alive()
+                except Exception as exc:
+                    self._proxy.error.emit(f"CAD worker restart failed: {exc}")
+                    return
 
     async def _ask(self, user_text: str) -> None:
         try:
@@ -380,6 +423,19 @@ class DockRuntime:
         return True
 
     async def _aclose(self) -> None:
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._heartbeat_task = None
+        if self._worker is not None:
+            try:
+                await self._worker.close()
+            except Exception:
+                pass
+            self._worker = None
         if self.client is not None:
             try:
                 await self.client.__aexit__(None, None, None)
