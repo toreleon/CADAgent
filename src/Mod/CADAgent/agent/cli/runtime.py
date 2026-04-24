@@ -41,8 +41,9 @@ from claude_agent_sdk import (
 )
 
 from ..prompts_cli import CAD_SYSTEM_PROMPT
-from . import mcp_tools
+from . import mcp_tools, worker_singleton
 from .subagents import build_agents
+from .worker_client import WorkerClient
 
 
 # ---------------------------------------------------------------------------
@@ -238,48 +239,63 @@ async def _drive(prompt: str) -> int:
     sys.stdout.write(f"{ACCENT}>{RESET} {prompt}\n")
     sys.stdout.flush()
 
-    async with ClaudeSDKClient(options=options) as client:
-        await client.query(prompt)
-        async for msg in client.receive_response():
-            if isinstance(msg, StreamEvent):
-                ev = msg.event or {}
-                if ev.get("type") == "content_block_delta":
-                    delta = ev.get("delta") or {}
-                    if delta.get("type") == "text_delta":
-                        txt = delta.get("text") or ""
-                        if txt:
-                            stream.assistant_text(txt)
-                    elif delta.get("type") == "thinking_delta":
-                        txt = delta.get("thinking") or ""
-                        if txt:
-                            stream.thinking(txt)
-                continue
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, ToolUseBlock):
-                        stream.tool_use(
-                            getattr(block, "id", ""),
-                            _strip_prefix(block.name),
-                            block.input,
-                        )
-                    elif isinstance(block, ThinkingBlock):
-                        stream.thinking(block.thinking)
-                    elif isinstance(block, TextBlock):
-                        # already streamed via text_delta
-                        pass
-            elif isinstance(msg, UserMessage):
-                # Tool results come back wrapped in a UserMessage.
-                content = getattr(msg, "content", None)
-                if isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, ToolResultBlock):
-                            stream.tool_result(
-                                getattr(block, "tool_use_id", ""),
-                                block.content,
-                                bool(getattr(block, "is_error", False) or False),
+    worker = WorkerClient()
+    try:
+        await worker.start()
+    except Exception as exc:
+        sys.stderr.write(f"{RED}!{RESET} failed to start CAD worker: {exc}\n")
+        return 3
+    worker_singleton.set_worker(worker)
+
+    try:
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(prompt)
+            async for msg in client.receive_response():
+                if isinstance(msg, StreamEvent):
+                    ev = msg.event or {}
+                    if ev.get("type") == "content_block_delta":
+                        delta = ev.get("delta") or {}
+                        if delta.get("type") == "text_delta":
+                            txt = delta.get("text") or ""
+                            if txt:
+                                stream.assistant_text(txt)
+                        elif delta.get("type") == "thinking_delta":
+                            txt = delta.get("thinking") or ""
+                            if txt:
+                                stream.thinking(txt)
+                    continue
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, ToolUseBlock):
+                            stream.tool_use(
+                                getattr(block, "id", ""),
+                                _strip_prefix(block.name),
+                                block.input,
                             )
-            elif isinstance(msg, ResultMessage):
-                stream.result(msg)
+                        elif isinstance(block, ThinkingBlock):
+                            stream.thinking(block.thinking)
+                        elif isinstance(block, TextBlock):
+                            # already streamed via text_delta
+                            pass
+                elif isinstance(msg, UserMessage):
+                    # Tool results come back wrapped in a UserMessage.
+                    content = getattr(msg, "content", None)
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, ToolResultBlock):
+                                stream.tool_result(
+                                    getattr(block, "tool_use_id", ""),
+                                    block.content,
+                                    bool(getattr(block, "is_error", False) or False),
+                                )
+                elif isinstance(msg, ResultMessage):
+                    stream.result(msg)
+    finally:
+        worker_singleton.set_worker(None)
+        try:
+            await worker.close()
+        except Exception:
+            pass
 
     stream.close_streams()
     return 0
