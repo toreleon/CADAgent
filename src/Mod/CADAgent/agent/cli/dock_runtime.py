@@ -48,12 +48,32 @@ from claude_agent_sdk import (
 )
 
 from .. import gui_thread, ui_bridge
-from ..permissions import make_can_use_tool
+from ..permissions import make_can_use_tool, clear_session_allowlist
 from ..worker import client as worker_client
 from . import dock_tools, runtime as cli_runtime
 
 
 _MCP_PREFIX = "mcp__cad__"
+
+# Auto-plan heuristic: treat a prompt as "complex" if it is long *and* hints at
+# multi-object / multi-feature design work. Single-feature edits ("rename
+# Pad001", "change thickness to 5mm") bypass plan mode to stay snappy.
+_AUTO_PLAN_VERBS = (
+    "design", "build", "model", "create a full", "refactor", "redesign",
+    "restructure", "multi-part", "assembly", "several", "multiple",
+)
+_AUTO_PLAN_MIN_CHARS = 90
+
+
+def _should_auto_plan(text: str) -> bool:
+    if not text or len(text) < _AUTO_PLAN_MIN_CHARS:
+        return False
+    lower = text.lower()
+    if not any(v in lower for v in _AUTO_PLAN_VERBS):
+        return False
+    # Crude multi-feature signal: commas, bullets, or the word "and" appearing
+    # more than once usually means the user is describing multiple deliverables.
+    return lower.count(",") + lower.count(" and ") + lower.count("\n- ") >= 2
 
 
 def _strip_prefix(name: str) -> str:
@@ -91,6 +111,11 @@ class _PanelProxy(QtCore.QObject):
     permissionModeChanged = QtCore.Signal(str)
     streamState = QtCore.Signal(str, bool)
     todosUpdate = QtCore.Signal(object)
+    # Plan-mode scaffolding (M1).
+    planFile = QtCore.Signal(str, str)  # (path, markdown)
+    planExited = QtCore.Signal()
+    # Edit-approval scaffolding (M3).
+    editApprovalRequest = QtCore.Signal(str, str, str, object)  # (reqId, summary, script, cf_future)
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -112,6 +137,20 @@ class _PanelProxy(QtCore.QObject):
             self.todosUpdate.connect(panel.update_todos)
         if hasattr(panel, "upsert_milestone"):
             self.milestoneUpsert.connect(panel.upsert_milestone)
+        if hasattr(panel, "on_plan_file"):
+            self.planFile.connect(panel.on_plan_file)
+        if hasattr(panel, "on_plan_exited"):
+            self.planExited.connect(panel.on_plan_exited)
+        self.editApprovalRequest.connect(self._on_edit_approval_request)
+
+    def _on_edit_approval_request(self, req_id, summary, script, cf_future):
+        try:
+            self._panel.request_edit_approval_threadsafe(
+                req_id, summary, script, cf_future
+            )
+        except Exception as exc:
+            if not cf_future.done():
+                cf_future.set_exception(exc)
 
     def _on_permission_request(self, tool_name, tool_input, cf_future):
         try:
@@ -218,6 +257,9 @@ class DockRuntime:
         self._current_future: concurrent.futures.Future | None = None
         self._workspace_path: str | None = None
         self._resume_sid: str | None = None
+        # One-turn permission_mode override set by auto-plan / slash commands.
+        # Consumed (and cleared) by _ensure_client the next time it runs.
+        self._mode_override: str | None = None
         # tool_use_ids we've consumed into richer surfaces (todos / plan_*);
         # their tool_result messages are suppressed so the generic "(tool
         # result)" fallback doesn't leak into the transcript.
@@ -265,6 +307,9 @@ class DockRuntime:
         mode = params.GetString("PermissionMode", "") or "default"
         if mode not in ("default", "acceptEdits", "plan", "bypassPermissions"):
             mode = "default"
+        if self._mode_override:
+            mode = self._mode_override
+            self._mode_override = None
         if not api_key:
             raise RuntimeError(
                 "No LLM API key configured. Use the CAD Agent menu → "
@@ -369,6 +414,12 @@ class DockRuntime:
                 self._suppressed_tool_ids.add(tool_id)
             return
 
+        if short == "exit_plan_mode":
+            if tool_id:
+                self._plan_tool_ids[tool_id] = short
+                self._suppressed_tool_ids.add(tool_id)
+            return
+
         if short.startswith("plan_"):
             if tool_id:
                 self._plan_tool_ids[tool_id] = short
@@ -395,6 +446,26 @@ class DockRuntime:
             self._emit_plan_milestones(block)
             self._suppressed_tool_ids.discard(tool_id)
             return
+        if plan_name == "exit_plan_mode":
+            self._emit_plan_file_from_result(block)
+            self._suppressed_tool_ids.discard(tool_id)
+            # Flip the runtime out of plan mode for the *next* turn. We can't
+            # mutate the live SDK options mid-turn, but clearing the override
+            # and rebuilding the client picks up the user's configured mode.
+            try:
+                params = App.ParamGet(
+                    "User parameter:BaseApp/Preferences/Mod/CADAgent"
+                )
+                user_mode = params.GetString("PermissionMode", "") or "default"
+                if user_mode == "plan":
+                    # If the user has "plan" wired as their default, bump to
+                    # "default" for the rest of this session so the handoff
+                    # actually takes effect.
+                    params.SetString("PermissionMode", "default")
+            except Exception:
+                pass
+            self._proxy.planExited.emit()
+            return
         if tool_id in self._suppressed_tool_ids:
             self._suppressed_tool_ids.discard(tool_id)
             return
@@ -403,6 +474,33 @@ class DockRuntime:
             block.content,
             bool(getattr(block, "is_error", False) or False),
         )
+
+    def _emit_plan_file_from_result(self, block: ToolResultBlock) -> None:
+        """Parse ``exit_plan_mode``'s JSON result and surface the plan file."""
+        content = block.content
+        text = ""
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text") or ""
+                    break
+        elif isinstance(content, str):
+            text = content
+        if not text:
+            return
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            return
+        path = (payload or {}).get("plan_file") or ""
+        markdown = ""
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    markdown = f.read()
+            except OSError:
+                markdown = ""
+        self._proxy.planFile.emit(str(path), markdown)
 
     def _emit_plan_milestones(self, block: ToolResultBlock) -> None:
         """Parse ``plan_emit``'s JSON result and fan out milestone rows."""
@@ -453,6 +551,20 @@ class DockRuntime:
             self.panel.show_error(f"Could not inspect active document: {exc}")
             return
         self._workspace_path = snap.get("path")
+        # Auto-plan entry: if the user hasn't explicitly picked a mode and the
+        # prompt looks complex, pin this turn to plan mode. The agent must
+        # call ``exit_plan_mode`` to unlock execution.
+        try:
+            cur_mode = App.ParamGet(
+                "User parameter:BaseApp/Preferences/Mod/CADAgent"
+            ).GetString("PermissionMode", "") or "default"
+        except Exception:
+            cur_mode = "default"
+        if cur_mode == "default" and _should_auto_plan(user_text):
+            self._mode_override = "plan"
+            # Rebuild the client so the next turn picks up the override.
+            if self.client is not None and self._loop is not None:
+                asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
         wrapped = f"{_build_preamble(snap)}\n\n{user_text}"
         loop = self._ensure_loop()
         self._current_future = asyncio.run_coroutine_threadsafe(
@@ -481,6 +593,7 @@ class DockRuntime:
         if self._turn_in_flight():
             return False
         self._resume_sid = None
+        clear_session_allowlist()
         if self.client is not None and self._loop is not None:
             asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
         return True

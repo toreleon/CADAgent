@@ -82,6 +82,7 @@ import QtQuick.Layouts 1.15
                 }
 
                 // Action row — inline plain-text buttons, no frames.
+                // Three-state: allow once / allow always (session) / deny.
                 Row {
                     visible: rowModel && rowModel.meta && rowModel.meta.pending
                     spacing: 12
@@ -95,34 +96,52 @@ import QtQuick.Layouts 1.15
                     }
 
                     MouseArea {
-                        width: approveLabel.width
-                        height: approveLabel.height
+                        id: onceArea
+                        width: onceLabel.width
+                        height: onceLabel.height
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: bridge.decidePermission(rowModel.meta.reqId, true, "")
+                        hoverEnabled: true
+                        onClicked: bridge.decidePermissionScoped(rowModel.meta.reqId, true, "once", "")
                         Text {
-                            id: approveLabel
-                            text: "[" + qsTr("yes") + "]"
-                            color: parent.containsMouse ? okColor : fgDim
+                            id: onceLabel
+                            text: "[" + qsTr("once") + "]"
+                            color: onceArea.containsMouse ? okColor : fgDim
                             font.pixelSize: fontSm
                             font.family: monoFamily
                             font.bold: true
                         }
-                        hoverEnabled: true
                     }
 
                     MouseArea {
-                        width: rejectLabel.width
-                        height: rejectLabel.height
+                        id: alwaysArea
+                        width: alwaysLabel.width
+                        height: alwaysLabel.height
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: bridge.decidePermission(rowModel.meta.reqId, false, "")
+                        hoverEnabled: true
+                        onClicked: bridge.decidePermissionScoped(rowModel.meta.reqId, true, "always", "")
                         Text {
-                            id: rejectLabel
-                            text: "[" + qsTr("no") + "]"
-                            color: parent.containsMouse ? errColor : fgDim
+                            id: alwaysLabel
+                            text: "[" + qsTr("always") + "]"
+                            color: alwaysArea.containsMouse ? okColor : fgDim
                             font.pixelSize: fontSm
                             font.family: monoFamily
                         }
+                    }
+
+                    MouseArea {
+                        id: denyArea
+                        width: denyLabel.width
+                        height: denyLabel.height
+                        cursorShape: Qt.PointingHandCursor
                         hoverEnabled: true
+                        onClicked: bridge.decidePermissionScoped(rowModel.meta.reqId, false, "deny", "")
+                        Text {
+                            id: denyLabel
+                            text: "[" + qsTr("deny") + "]"
+                            color: denyArea.containsMouse ? errColor : fgDim
+                            font.pixelSize: fontSm
+                            font.family: monoFamily
+                        }
                     }
                 }
 

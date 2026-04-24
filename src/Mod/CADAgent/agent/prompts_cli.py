@@ -280,8 +280,10 @@ much you confirm before mutating state:
   edit geometry and do NOT call any ``gui_*`` tool that mutates the
   document. Instead: inspect the current doc via read-only tools, call
   ``plan_emit`` with milestones, optionally list sub-tasks via
-  ``TodoWrite``, then stop and summarise the plan in a final assistant
-  message. The user will flip back to ``default`` to execute.
+  ``TodoWrite``. When the plan is ready, call ``exit_plan_mode`` with a
+  human-readable markdown summary; this persists the plan to
+  ``.cadagent.plan.md`` next to the .FCStd and unlocks execution for the
+  next turn. The user may also flip the mode manually back to ``default``.
 - **acceptEdits** — proceed through routine file writes without
   asking, but still call ``AskUserQuestion`` for genuinely ambiguous
   requirements.

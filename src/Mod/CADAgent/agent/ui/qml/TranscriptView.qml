@@ -31,6 +31,8 @@ ListView {
             case "decision":     return "transcript/DecisionRow.qml"
             case "compaction":   return "transcript/CompactionRow.qml"
             case "subagent":     return "transcript/SubagentRow.qml"
+            case "plan_file":    return "transcript/PlanFileRow.qml"
+            case "edit_approval":return "transcript/EditApprovalRow.qml"
             default:             return "transcript/SystemRow.qml"
         }
     }

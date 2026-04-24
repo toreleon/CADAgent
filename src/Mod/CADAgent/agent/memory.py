@@ -445,6 +445,56 @@ def active_milestone(doc) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
+def plan_file_path(doc) -> str:
+    """Path to the markdown plan sidecar, alongside the .FCStd.
+
+    Mirrors :func:`sidecar_path` but uses a ``.cadagent.plan.md`` suffix so the
+    plan is independently human-readable and diff-friendly.
+    """
+    file_name = getattr(doc, "FileName", "") or ""
+    if file_name:
+        base, _ext = os.path.splitext(file_name)
+        return base + ".cadagent.plan.md"
+    if App is None:
+        raise RuntimeError(
+            "Doc has no FileName and FreeCAD is not importable — "
+            "save the .FCStd first so the plan file can live next to it."
+        )
+    unsaved_dir = os.path.join(App.getUserAppDataDir(), "CADAgent", "unsaved")
+    os.makedirs(unsaved_dir, exist_ok=True)
+    return os.path.join(unsaved_dir, f"{doc.Name}.cadagent.plan.md")
+
+
+def write_plan_file(doc, markdown: str) -> str:
+    path = plan_file_path(doc)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        prefix=".cadagent.plan.", suffix=".md", dir=os.path.dirname(path) or "."
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(markdown or "")
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def read_plan_file(doc) -> str:
+    path = plan_file_path(doc)
+    if not os.path.exists(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
 def write_note(doc, section: str, key: str, value) -> dict:
     data = load(doc)
     if section not in data or not isinstance(data[section], dict):

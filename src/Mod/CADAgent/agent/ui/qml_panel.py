@@ -431,6 +431,47 @@ class MessagesModel(QtCore.QAbstractListModel):
         }
         self._append({"kind": "decision", "text": title, "meta": meta})
 
+    def add_plan_file(self, path: str, markdown: str) -> None:
+        """Append a PlanFileRow — the plan the agent persisted via
+        ``exit_plan_mode``. The row shows the markdown and an Approve hint."""
+        self._close_assistant()
+        self._collapse_thinking()
+        self._append({
+            "kind": "plan_file",
+            "text": markdown or "",
+            "meta": {"path": path or "", "approved": False},
+        })
+
+    def add_edit_approval(
+        self, req_id: str, summary: str, script: str
+    ) -> None:
+        self._close_assistant()
+        self._collapse_thinking()
+        meta = {
+            "reqId": req_id,
+            "summary": summary or "",
+            "script": script or "",
+            "pending": True,
+            "decision": "",
+        }
+        idx = self._append({"kind": "edit_approval", "text": summary or "", "meta": meta})
+        # Re-use the perm_index so _edit_approval can close in-place.
+        self._perm_index[f"edit:{req_id}"] = idx
+
+    def resolve_edit_approval(self, req_id: str, allowed: bool) -> None:
+        idx = self._perm_index.pop(f"edit:{req_id}", None)
+        if idx is None:
+            return
+        row = self._rows[idx]
+        meta = dict(row.get("meta") or {})
+        meta["pending"] = False
+        meta["decision"] = (
+            translate("CADAgent", "Approved") if allowed
+            else translate("CADAgent", "Rejected")
+        )
+        row["meta"] = meta
+        self._emit_changed(idx)
+
     def add_compaction(
         self,
         tokens_before: int | None,
@@ -595,6 +636,7 @@ class QmlChatBridge(QtCore.QObject):
         self._milestone_summary: str = ""
         self._pending_perm: dict[str, asyncio.Future] = {}
         self._pending_ask: dict[str, Any] = {}  # concurrent.futures.Future
+        self._pending_edit: dict[str, Any] = {}  # concurrent.futures.Future
 
     def bind(self, panel: "QmlChatPanel", runtime) -> None:
         self._panel = panel
@@ -684,11 +726,132 @@ class QmlChatBridge(QtCore.QObject):
         if self._runtime is None:
             self._model.add_error(translate("CADAgent", "Agent runtime not ready."))
             return
+        # Slash commands are intercepted here so the user prompt never reaches
+        # the LLM when it's really a local directive.
+        if text.startswith("/"):
+            if self._handle_slash(text):
+                self.scrollToEnd.emit()
+                return
         if self._panel is not None and not self._panel._first_prompt:
             self._panel._first_prompt = text
         self._model.add_user(text)
         self.set_busy(True)
         self._runtime.submit(text)
+        self.scrollToEnd.emit()
+
+    def _handle_slash(self, raw: str) -> bool:
+        """Dispatch slash commands. Returns True if consumed."""
+        parts = raw[1:].strip().split(None, 1)
+        if not parts:
+            return False
+        cmd = parts[0].lower()
+        rest = parts[1] if len(parts) > 1 else ""
+        if cmd in ("plan",):
+            # Pin the next turn to plan mode + forward the rest as the prompt.
+            if rest:
+                if self._runtime is not None:
+                    self._runtime._mode_override = "plan"
+                    if self._runtime.client is not None and self._runtime._loop is not None:
+                        asyncio.run_coroutine_threadsafe(
+                            self._runtime._aclose(), self._runtime._loop
+                        )
+                self._model.add_user(rest)
+                self._model.add_system(
+                    translate("CADAgent", "Plan mode active for this turn — the agent will research and call exit_plan_mode.")
+                )
+                self.set_busy(True)
+                self._runtime.submit(rest)
+            else:
+                self.set_permission_mode("plan")
+                self._model.add_system(
+                    translate("CADAgent", "Permission mode set to plan.")
+                )
+            return True
+        if cmd in ("review", "sketch", "assemble"):
+            prompt_map = {
+                "review": "Use the reviewer subagent to audit the current document and report issues.",
+                "sketch": f"Use the sketcher subagent to: {rest or 'design a sketch per the active plan milestone.'}",
+                "assemble": f"Use the assembler subagent to: {rest or 'perform the next assembly step.'}",
+            }
+            prompt = prompt_map[cmd]
+            self._model.add_user(f"/{cmd} {rest}".strip())
+            self.set_busy(True)
+            self._runtime.submit(prompt)
+            return True
+        if cmd in ("resume",):
+            # The HistoryPopup is driven by bridge.listSessions/openSession. We
+            # can't open it from Python, but we can point the user at it.
+            self._model.add_system(
+                translate("CADAgent", "Open the history popup (clock icon) to resume a prior session.")
+            )
+            return True
+        if cmd in ("compact",):
+            self._run_local_compaction()
+            return True
+        if cmd in ("clear", "new"):
+            self.newChat()
+            return True
+        if cmd in ("help",):
+            self._model.add_system(
+                translate(
+                    "CADAgent",
+                    "Commands: /plan <task>  /review  /sketch <desc>  /assemble <desc>  "
+                    "/resume  /compact  /clear  /help",
+                )
+            )
+            return True
+        return False
+
+    def _run_local_compaction(self) -> None:
+        """Collapse rows older than the last ~30 into a single CompactionRow.
+
+        This is a local, no-LLM compaction: the model's own context is handled
+        by the SDK's session resume; this surface just keeps the transcript
+        scrollable once it grows past a few hundred rows.
+        """
+        rows = self._model._rows
+        cutoff = len(rows) - 30
+        if cutoff <= 3:
+            self._model.add_system(
+                translate("CADAgent", "Nothing to compact yet.")
+            )
+            return
+        # Preserve the tail; replace the head with a single compaction row.
+        head = rows[:cutoff]
+        tail = rows[cutoff:]
+        self._model.beginResetModel()
+        self._model._rows = []
+        # Rebuild indices from scratch; the tail rows keep their original
+        # rowIds and meta, so in-flight tool/perm rows still resolve.
+        self._model._open_assistant = None
+        self._model._open_thinking = None
+        self._model._tool_index.clear()
+        self._model._perm_index.clear()
+        self._model._milestone_index.clear()
+        self._model._row_by_id.clear()
+        self._model._todos_row = None
+        self._model._current_agent = None
+        # Compaction summary row first.
+        summary_row = {
+            "kind": "compaction",
+            "text": "",
+            "meta": {
+                "tokensBefore": None,
+                "tokensAfter": None,
+                "archivePath": "",
+                "summary": translate(
+                    "CADAgent", "{0} earlier rows collapsed."
+                ).format(len(head)),
+            },
+            "rowId": self._model._alloc_row_id(),
+        }
+        self._model._rows.append(summary_row)
+        self._model._row_by_id[summary_row["rowId"]] = 0
+        # Re-append tail.
+        for row in tail:
+            self._model._rows.append(row)
+            self._model._row_by_id[row.get("rowId", "")] = len(self._model._rows) - 1
+        self._model.endResetModel()
         self.scrollToEnd.emit()
 
     @QtCore.Slot()
@@ -791,10 +954,34 @@ class QmlChatBridge(QtCore.QObject):
 
     @QtCore.Slot(str, bool, str)
     def decidePermission(self, req_id: str, allowed: bool, reason: str) -> None:
+        """Back-compat two-state entry point (yes / no).
+
+        Scope defaults to ``"once"``. QML that wants "Allow always" should
+        call :meth:`decidePermissionScoped` instead.
+        """
+        self.decidePermissionScoped(req_id, allowed, "once", reason)
+
+    @QtCore.Slot(str, bool, str, str)
+    def decidePermissionScoped(
+        self, req_id: str, allowed: bool, scope: str, reason: str
+    ) -> None:
+        if scope not in ("once", "always", "deny"):
+            scope = "once" if allowed else "deny"
         fut = self._pending_perm.pop(req_id, None)
         self._model.resolve_permission(req_id, allowed)
         if fut is not None and not fut.done():
-            fut.set_result(Decision(allowed=allowed, reason=reason or ""))
+            fut.set_result(
+                Decision(allowed=allowed, reason=reason or "", scope=scope)
+            )
+
+    @QtCore.Slot(str, bool)
+    def decideEditApproval(self, req_id: str, allowed: bool) -> None:
+        fut = self._pending_edit.pop(req_id, None)
+        self._model.resolve_edit_approval(req_id, allowed)
+        if fut is not None and not fut.done():
+            fut.set_result(
+                Decision(allowed=allowed, scope=("once" if allowed else "deny"))
+            )
 
     @QtCore.Slot(str, str)
     def submitAnswers(self, ask_id: str, answers_json: str) -> None:
@@ -824,6 +1011,13 @@ class QmlChatBridge(QtCore.QObject):
     def register_ask(self, ask_id: str, fut, questions: list) -> None:
         self._pending_ask[ask_id] = fut
         self._model.add_ask(ask_id, questions)
+        self.scrollToEnd.emit()
+
+    def register_edit_approval(
+        self, req_id: str, fut, summary: str, script: str
+    ) -> None:
+        self._pending_edit[req_id] = fut
+        self._model.add_edit_approval(req_id, summary, script)
         self.scrollToEnd.emit()
 
 
@@ -1074,6 +1268,22 @@ class QmlChatPanel(QtWidgets.QWidget):
             self.model.end_subagent()
             self.bridge.set_current_agent("main")
         self.bridge.scrollToEnd.emit()
+
+    def on_plan_file(self, path: str, markdown: str) -> None:
+        self.model.add_plan_file(path, markdown)
+        self.bridge.scrollToEnd.emit()
+
+    def on_plan_exited(self) -> None:
+        self.model.add_system(
+            translate("CADAgent", "Exited plan mode — execution enabled.")
+        )
+        self.bridge.set_permission_mode("default", persist=False)
+        self.bridge.scrollToEnd.emit()
+
+    def request_edit_approval_threadsafe(
+        self, req_id: str, summary: str, script: str, cf_future
+    ) -> None:
+        self.bridge.register_edit_approval(req_id, cf_future, summary, script)
 
     def set_stream_state(self, row_id: str, is_partial: bool) -> None:
         # Today only the open assistant row streams; the row_id argument is

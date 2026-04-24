@@ -282,6 +282,33 @@ async def plan_milestone_failed(args):
         return _err(str(exc))
 
 
+@tool(
+    "exit_plan_mode",
+    "Leave plan mode and begin execution. Call this only after you have "
+    "finished researching and have written a final plan summary. Pass the "
+    "plan as a markdown string — it is saved to .cadagent.plan.md alongside "
+    "the .FCStd and shown to the user for approval before any Bash / Write "
+    "tools unlock.",
+    _schema(
+        summary={"type": "string", "required": True},
+    ),
+)
+async def exit_plan_mode(args):
+    """Persist the plan and signal the runtime to leave plan mode.
+
+    The runtime intercepts this tool's use (permission hook shows the plan
+    for approval) and its result (flips ``permission_mode`` to ``default``
+    for the next turn).
+    """
+    try:
+        doc = _handle(args)
+        summary = args.get("summary") or ""
+        path = project_memory.write_plan_file(doc, summary)
+        return _ok({"plan_file": path, "bytes": len(summary)})
+    except Exception as exc:
+        return _err(str(exc))
+
+
 # ---------------------------------------------------------------------------
 # registry helpers used by runtime.py
 # ---------------------------------------------------------------------------
@@ -299,6 +326,7 @@ TOOL_FUNCS = [
     plan_milestone_activate,
     plan_milestone_done,
     plan_milestone_failed,
+    exit_plan_mode,
 ]
 
 TOOL_NAMES = [f.name if hasattr(f, "name") else f.__name__ for f in TOOL_FUNCS]

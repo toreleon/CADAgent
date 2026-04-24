@@ -18,6 +18,17 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 from . import ui_bridge
 
 
+# Tools whose invocation should be surfaced as a stageable "edit" rather than
+# a generic permission prompt. The user sees an intent summary + the raw
+# script (for Bash) and clicks Apply / Reject.
+MUTATING_TOOLS = {
+    "Bash",
+    "Write",
+    "mcp__cad__gui_new_document",
+    "mcp__cad__gui_open_document",
+}
+
+
 # Tools that never mutate the document — auto-allow to keep the UX snappy.
 READ_ONLY_TOOLS = {
     "mcp__cad__list_documents",
@@ -36,6 +47,48 @@ READ_ONLY_TOOLS = {
 }
 
 
+_INTENT_HINTS = (
+    ("Pad", "create a Pad"),
+    ("Pocket", "create a Pocket"),
+    ("Fillet", "add a Fillet"),
+    ("Chamfer", "add a Chamfer"),
+    ("Sketcher::SketchObject", "create a Sketch"),
+    ("addObject", "add a FreeCAD object"),
+    ("recompute", "recompute the document"),
+    ("saveAs", "save the document"),
+)
+
+
+def _summarise_edit(tool_name: str, tool_input: dict) -> tuple[str, str]:
+    """Best-effort one-liner for the EditApprovalRow + the raw script body.
+
+    The summary is a hint, not a contract — the agent's own narration in the
+    surrounding assistant text is the authoritative description.
+    """
+    data = tool_input or {}
+    if tool_name == "Bash":
+        cmd = str(data.get("command") or "")
+        desc = str(data.get("description") or "").strip()
+        intent = desc or _guess_intent(cmd) or "Run shell command"
+        return (f"Bash: {intent}", cmd)
+    if tool_name == "Write":
+        path = str(data.get("file_path") or "")
+        content = str(data.get("content") or "")
+        return (f"Write file: {path}", content)
+    if tool_name.endswith("gui_new_document"):
+        return (f"Create FreeCAD document at {data.get('path', '?')}", "")
+    if tool_name.endswith("gui_open_document"):
+        return (f"Open FreeCAD document at {data.get('path', '?')}", "")
+    return (tool_name, str(data))
+
+
+def _guess_intent(cmd: str) -> str:
+    for needle, intent in _INTENT_HINTS:
+        if needle in cmd:
+            return intent
+    return ""
+
+
 def is_dry_run(tool_input: dict) -> bool:
     """Dry-run invocations never touch the document — auto-allow them."""
     return bool((tool_input or {}).get("dry_run"))
@@ -43,8 +96,36 @@ def is_dry_run(tool_input: dict) -> bool:
 
 @dataclass
 class Decision:
+    """User's verdict from a PermissionRow.
+
+    ``scope`` is one of:
+
+    * ``"once"`` — allow this specific invocation only.
+    * ``"always"`` — allow this tool for the rest of the session; subsequent
+      calls skip the prompt.
+    * ``"deny"`` — reject this invocation; ``allowed`` is False.
+
+    ``allowed`` stays for back-compat (and is False only when ``scope=="deny"``).
+    """
     allowed: bool
     reason: str = ""
+    scope: str = "once"
+
+
+# Session-scoped allowlist: tool names the user has ticked "Allow always" for.
+# Cleared when ``make_can_use_tool`` is recreated — i.e. on new session /
+# client rebuild. A simple module-level set is fine because the runtime builds
+# exactly one callback per live client.
+_SESSION_ALLOWLIST: set[str] = set()
+
+
+def clear_session_allowlist() -> None:
+    """Invoked by the runtime when a new session begins."""
+    _SESSION_ALLOWLIST.clear()
+
+
+def session_allowlist() -> set[str]:
+    return set(_SESSION_ALLOWLIST)
 
 
 def make_can_use_tool(proxy):
@@ -86,9 +167,20 @@ def make_can_use_tool(proxy):
         if tool_name in READ_ONLY_TOOLS or is_dry_run(tool_input):
             return PermissionResultAllow(updated_input=tool_input)
 
+        if tool_name in _SESSION_ALLOWLIST:
+            return PermissionResultAllow(updated_input=tool_input)
+
         cf: concurrent.futures.Future = concurrent.futures.Future()
-        proxy.permissionRequest.emit(tool_name, tool_input, cf)
+        if tool_name in MUTATING_TOOLS:
+            summary, script = _summarise_edit(tool_name, tool_input)
+            import uuid
+            req_id = uuid.uuid4().hex
+            proxy.editApprovalRequest.emit(req_id, summary, script, cf)
+        else:
+            proxy.permissionRequest.emit(tool_name, tool_input, cf)
         decision = await asyncio.wrap_future(cf)
+        if decision.scope == "always" and decision.allowed:
+            _SESSION_ALLOWLIST.add(tool_name)
         if decision.allowed:
             return PermissionResultAllow(updated_input=tool_input)
         return PermissionResultDeny(message=decision.reason or "User rejected this action.")
