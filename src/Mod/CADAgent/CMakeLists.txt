@@ -48,7 +48,31 @@ SET(CADAgent_UI
 )
 
 SET(CADAgent_UI_QML
+    agent/ui/qml/ChatComposer.qml
     agent/ui/qml/ChatPanel.qml
+    agent/ui/qml/ChatTopBar.qml
+    agent/ui/qml/HistoryPopup.qml
+    agent/ui/qml/ModesPopup.qml
+    agent/ui/qml/PlanBanner.qml
+    agent/ui/qml/TranscriptView.qml
+)
+
+SET(CADAgent_UI_QML_TRANSCRIPT
+    agent/ui/qml/transcript/AskRow.qml
+    agent/ui/qml/transcript/AssistantRow.qml
+    agent/ui/qml/transcript/CompactionRow.qml
+    agent/ui/qml/transcript/DecisionRow.qml
+    agent/ui/qml/transcript/ErrorRow.qml
+    agent/ui/qml/transcript/FooterRow.qml
+    agent/ui/qml/transcript/MilestoneRow.qml
+    agent/ui/qml/transcript/PermissionRow.qml
+    agent/ui/qml/transcript/SubagentRow.qml
+    agent/ui/qml/transcript/SystemRow.qml
+    agent/ui/qml/transcript/ThinkingRow.qml
+    agent/ui/qml/transcript/TodosRow.qml
+    agent/ui/qml/transcript/ToolRow.qml
+    agent/ui/qml/transcript/UserRow.qml
+    agent/ui/qml/transcript/VerificationRow.qml
 )
 
 SET(CADAgent_SRCS
@@ -59,6 +83,7 @@ SET(CADAgent_SRCS
     ${CADAgent_AGENT_WORKER_HANDLERS}
     ${CADAgent_UI}
     ${CADAgent_UI_QML}
+    ${CADAgent_UI_QML_TRANSCRIPT}
 )
 
 SOURCE_GROUP("" FILES ${CADAgent_SRCS})
@@ -81,6 +106,7 @@ INSTALL(FILES ${CADAgent_AGENT_WORKER} DESTINATION Mod/CADAgent/agent/worker)
 INSTALL(FILES ${CADAgent_AGENT_WORKER_HANDLERS} DESTINATION Mod/CADAgent/agent/worker/handlers)
 INSTALL(FILES ${CADAgent_UI} DESTINATION Mod/CADAgent/agent/ui)
 INSTALL(FILES ${CADAgent_UI_QML} DESTINATION Mod/CADAgent/agent/ui/qml)
+INSTALL(FILES ${CADAgent_UI_QML_TRANSCRIPT} DESTINATION Mod/CADAgent/agent/ui/qml/transcript)
 
 # ---------------------------------------------------------------------------
 # Live-LLM smoke tests (opt-in)
