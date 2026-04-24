@@ -28,25 +28,27 @@
 Responsibilities:
   * Install a qasync event loop once so the Claude Agent SDK can run alongside Qt.
   * Create the chat dock widget on demand.
-  * Register commands and preferences page.
+  * Register the open-panel command.
+
+LLM configuration (model, base URL, API key) is read from environment
+variables by the underlying CLI agent runtime — see
+``agent/cli/runtime.py``.
 """
 
 from __future__ import annotations
 
-import os
-import sys
 import traceback
 
 import FreeCAD as App
 import FreeCADGui as Gui
 
 try:
-    from PySide import QtCore, QtGui, QtWidgets
+    from PySide import QtWidgets
 except ImportError:
     try:
-        from PySide6 import QtCore, QtGui, QtWidgets
+        from PySide6 import QtWidgets
     except ImportError:
-        from PySide2 import QtCore, QtGui, QtWidgets
+        from PySide2 import QtWidgets
 
 
 translate = App.Qt.translate
@@ -57,10 +59,7 @@ _LOOP_INSTALLED = False
 
 
 def _install_asyncio_loop() -> None:
-    """Install qasync's Qt-backed asyncio event loop.
-
-    Runs once per FreeCAD session; subsequent calls are no-ops.
-    """
+    """Install qasync's Qt-backed asyncio event loop. Idempotent."""
     global _LOOP_INSTALLED
     if _LOOP_INSTALLED:
         return
@@ -76,7 +75,6 @@ def _install_asyncio_loop() -> None:
     if app is None:
         raise RuntimeError("Qt application is not running; cannot install asyncio loop.")
     try:
-        # If the current event loop is already a QEventLoop, reuse it.
         existing = asyncio.get_event_loop()
         if isinstance(existing, qasync.QEventLoop):
             _LOOP_INSTALLED = True
@@ -88,41 +86,16 @@ def _install_asyncio_loop() -> None:
     _LOOP_INSTALLED = True
 
 
-def add_preferences_page() -> None:
-    """Register the CAD Agent preferences page if the .ui file is available."""
-    ui_path = os.path.join(os.path.dirname(__file__), "dlgPreferencesCADAgent.ui")
-    if os.path.exists(ui_path):
-        Gui.addPreferencePage(ui_path, "CAD Agent")
-
-
-def _make_open_panel_command():
-    """Build and return the CADAgent_OpenPanel command class."""
-    try:
-        import CADAgent_rc  # noqa: F401 - registers Qt resources
-    except ImportError:
-        pass
-
-    class CADAgent_OpenPanel:
-        def GetResources(self):
-            return {
-                "MenuText": translate("CADAgent", "Open CAD Agent"),
-                "ToolTip": translate("CADAgent", "Open the CAD Agent chat panel"),
-                "Pixmap": ":/CADAgent/icons/CADAgent.svg",
-            }
-
-        def IsActive(self):
-            return True
-
-        def Activated(self):
-            open_panel()
-
-    return CADAgent_OpenPanel
+PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/CADAgent"
 
 
 def _make_configure_llm_command():
-    """Build and return the CADAgent_ConfigureLLM command class."""
+    """Build and return the CADAgent_ConfigureLLM command class.
 
-    PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/CADAgent"
+    Persists the LiteLLM proxy URL, API key, and model into FreeCAD's
+    parameter store. The dock runtime reads these (falling back to
+    ANTHROPIC_* env vars) when starting the SDK client.
+    """
 
     def _open_dialog():
         params = App.ParamGet(PARAM_PATH)
@@ -131,15 +104,15 @@ def _make_configure_llm_command():
         form = QtWidgets.QFormLayout(dlg)
 
         url_edit = QtWidgets.QLineEdit(params.GetString("BaseURL", ""), dlg)
-        url_edit.setPlaceholderText("http://localhost:4000")
-        form.addRow(translate("CADAgent", "LiteLLM proxy URL"), url_edit)
+        url_edit.setPlaceholderText("http://localhost:4000  (leave blank for direct Anthropic)")
+        form.addRow(translate("CADAgent", "Base URL"), url_edit)
 
         key_edit = QtWidgets.QLineEdit(params.GetString("ApiKey", ""), dlg)
         key_edit.setEchoMode(QtWidgets.QLineEdit.Password)
-        form.addRow(translate("CADAgent", "LiteLLM proxy key"), key_edit)
+        form.addRow(translate("CADAgent", "API key"), key_edit)
 
         model_edit = QtWidgets.QLineEdit(params.GetString("Model", ""), dlg)
-        model_edit.setPlaceholderText("gpt-5-mini")
+        model_edit.setPlaceholderText("claude-opus-4-7")
         form.addRow(translate("CADAgent", "Model"), model_edit)
 
         buttons = QtWidgets.QDialogButtonBox(
@@ -173,8 +146,7 @@ def _make_configure_llm_command():
             return {
                 "MenuText": translate("CADAgent", "Configure LLM…"),
                 "ToolTip": translate(
-                    "CADAgent",
-                    "Set the LiteLLM proxy URL, key, and model",
+                    "CADAgent", "Set the API base URL, key, and model"
                 ),
                 "Pixmap": ":/CADAgent/icons/CADAgent.svg",
             }
@@ -188,13 +160,31 @@ def _make_configure_llm_command():
     return CADAgent_ConfigureLLM
 
 
-def register_commands() -> None:
-    """Register the CAD Agent Gui commands (idempotent).
+def _make_open_panel_command():
+    try:
+        import CADAgent_rc  # noqa: F401 - registers Qt resources
+    except ImportError:
+        pass
 
-    FreeCAD's ``Gui.addCommand`` does not raise on duplicate names — it logs
-    ``duplicate command …`` to the console. Check the existing registry so
-    re-entry from multiple InitGui paths stays silent.
-    """
+    class CADAgent_OpenPanel:
+        def GetResources(self):
+            return {
+                "MenuText": translate("CADAgent", "Open CAD Agent"),
+                "ToolTip": translate("CADAgent", "Open the CAD Agent chat panel"),
+                "Pixmap": ":/CADAgent/icons/CADAgent.svg",
+            }
+
+        def IsActive(self):
+            return True
+
+        def Activated(self):
+            open_panel()
+
+    return CADAgent_OpenPanel
+
+
+def register_commands() -> None:
+    """Register the CAD Agent Gui commands (idempotent)."""
     existing = set(Gui.listCommands())
     if "CADAgent_OpenPanel" not in existing:
         try:
@@ -224,7 +214,7 @@ def open_panel() -> None:
         return
 
     from agent.ui import qml_panel as ChatPanelMod
-    from agent.runtime import AgentRuntime
+    from agent.cli.dock_runtime import DockRuntime
 
     dock = ChatPanelMod.get_or_create_dock()
     panel = ChatPanelMod.get_panel()
@@ -233,7 +223,7 @@ def open_panel() -> None:
         return
 
     if _RUNTIME is None:
-        _RUNTIME = AgentRuntime(panel)
+        _RUNTIME = DockRuntime(panel)
         panel.attach_runtime(_RUNTIME)
 
     dock.show()

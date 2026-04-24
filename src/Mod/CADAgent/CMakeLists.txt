@@ -5,46 +5,28 @@ IF (BUILD_GUI)
 ENDIF (BUILD_GUI)
 
 SET(CADAgent_TOP
-    Init.py
     InitGui.py
     CADAgent.py
-    cli.py
-    dlgPreferencesCADAgent.ui
 )
 
 SET(CADAgent_AGENT
     agent/__init__.py
-    agent/runtime.py
-    agent/context.py
-    agent/envelope.py
-    agent/errors.py
     agent/gui_thread.py
-    agent/hooks.py
     agent/memory.py
-    agent/orchestrator.py
     agent/permissions.py
-    agent/prompts.py
-    agent/registry.py
+    agent/prompts_cli.py
     agent/sessions.py
-    agent/subagents.py
     agent/ui_bridge.py
-    agent/verbs.py
 )
 
-SET(CADAgent_PROVIDERS
-    agent/providers/__init__.py
-    agent/providers/_v1_adapter.py
-    agent/providers/assembly.py
-    agent/providers/bulk.py
-    agent/providers/draft.py
-    agent/providers/io_extras.py
-    agent/providers/mesh.py
-    agent/providers/meta.py
-    agent/providers/partdesign_native.py
-    agent/providers/partdesign_shell.py
-    agent/providers/sheet_metal.py
-    agent/providers/sketch_native.py
-    agent/providers/techdraw.py
+SET(CADAgent_AGENT_CLI
+    agent/cli/__init__.py
+    agent/cli/doc_handle.py
+    agent/cli/dock_runtime.py
+    agent/cli/dock_tools.py
+    agent/cli/mcp_tools.py
+    agent/cli/runtime.py
+    agent/cli/subagents.py
 )
 
 SET(CADAgent_UI
@@ -56,43 +38,12 @@ SET(CADAgent_UI_QML
     agent/ui/qml/ChatPanel.qml
 )
 
-SET(CADAgent_TOOLS
-    agent/tools/__init__.py
-    agent/tools/_shared.py
-    agent/tools/doc.py
-    agent/tools/selection.py
-    agent/tools/geometry.py
-    agent/tools/memory.py
-    agent/tools/diagnostics.py
-    agent/tools/planning.py
-    agent/tools/profiles.py
-)
-
-SET(CADAgent_TOOLS_PARTDESIGN
-    agent/tools/partdesign/__init__.py
-    agent/tools/partdesign/_pd_shared.py
-    agent/tools/partdesign/body.py
-    agent/tools/partdesign/sketch.py
-    agent/tools/partdesign/pad_pocket.py
-    agent/tools/partdesign/dress_ups.py
-)
-
-SET(CADAgent_TOOLS_MACROS
-    agent/tools/macros/__init__.py
-    agent/tools/macros/_macro_shared.py
-    agent/tools/macros/plate.py
-    agent/tools/macros/holes.py
-)
-
 SET(CADAgent_SRCS
     ${CADAgent_TOP}
     ${CADAgent_AGENT}
-    ${CADAgent_PROVIDERS}
+    ${CADAgent_AGENT_CLI}
     ${CADAgent_UI}
     ${CADAgent_UI_QML}
-    ${CADAgent_TOOLS}
-    ${CADAgent_TOOLS_PARTDESIGN}
-    ${CADAgent_TOOLS_MACROS}
 )
 
 SOURCE_GROUP("" FILES ${CADAgent_SRCS})
@@ -110,12 +61,9 @@ ENDIF (BUILD_GUI)
 
 INSTALL(FILES ${CADAgent_TOP} ${CADAgent_QRC_SRCS} DESTINATION Mod/CADAgent)
 INSTALL(FILES ${CADAgent_AGENT} DESTINATION Mod/CADAgent/agent)
-INSTALL(FILES ${CADAgent_PROVIDERS} DESTINATION Mod/CADAgent/agent/providers)
+INSTALL(FILES ${CADAgent_AGENT_CLI} DESTINATION Mod/CADAgent/agent/cli)
 INSTALL(FILES ${CADAgent_UI} DESTINATION Mod/CADAgent/agent/ui)
 INSTALL(FILES ${CADAgent_UI_QML} DESTINATION Mod/CADAgent/agent/ui/qml)
-INSTALL(FILES ${CADAgent_TOOLS} DESTINATION Mod/CADAgent/agent/tools)
-INSTALL(FILES ${CADAgent_TOOLS_PARTDESIGN} DESTINATION Mod/CADAgent/agent/tools/partdesign)
-INSTALL(FILES ${CADAgent_TOOLS_MACROS} DESTINATION Mod/CADAgent/agent/tools/macros)
 
 # ---------------------------------------------------------------------------
 # Live-LLM smoke tests (opt-in)

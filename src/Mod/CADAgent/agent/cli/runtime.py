@@ -175,11 +175,25 @@ def _strip_prefix(name: str) -> str:
     return name[len(_MCP_PREFIX):] if name.startswith(_MCP_PREFIX) else name
 
 
-def _build_options() -> ClaudeAgentOptions:
+def build_options(
+    *,
+    extra_tools: list | None = None,
+    extra_allowed_tool_names: list[str] | None = None,
+    **overrides: Any,
+) -> ClaudeAgentOptions:
+    """Build ClaudeAgentOptions for the CLI agent.
+
+    ``overrides`` lets in-process hosts (e.g. the FreeCAD dock) replace
+    fields like ``permission_mode`` or inject ``can_use_tool`` without
+    duplicating the option scaffolding here. ``extra_tools`` and
+    ``extra_allowed_tool_names`` let the dock add MCP tools that only
+    make sense when running inside FreeCAD (doc inspection / creation).
+    """
     model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7")
     os.environ.setdefault("ANTHROPIC_SMALL_FAST_MODEL", model)
 
-    server = create_sdk_mcp_server(name="cad", tools=mcp_tools.TOOL_FUNCS)
+    tool_funcs = list(mcp_tools.TOOL_FUNCS) + list(extra_tools or [])
+    server = create_sdk_mcp_server(name="cad", tools=tool_funcs)
 
     # SDK built-ins the agent is allowed to use. Deliberately excluding Edit:
     # the CLI agent is supposed to write new .py scripts via Bash heredocs,
@@ -194,9 +208,13 @@ def _build_options() -> ClaudeAgentOptions:
         "Agent",
         "TodoWrite",
     ]
-    allowed = mcp_tools.allowed_tool_names("cad") + sdk_builtins
+    allowed = (
+        mcp_tools.allowed_tool_names("cad")
+        + list(extra_allowed_tool_names or [])
+        + sdk_builtins
+    )
 
-    return ClaudeAgentOptions(
+    kwargs: dict[str, Any] = dict(
         model=model,
         system_prompt=CAD_SYSTEM_PROMPT,
         mcp_servers={"cad": server},
@@ -205,6 +223,8 @@ def _build_options() -> ClaudeAgentOptions:
         permission_mode=os.environ.get("CADAGENT_PERMS", "bypassPermissions"),
         include_partial_messages=True,
     )
+    kwargs.update(overrides)
+    return ClaudeAgentOptions(**kwargs)
 
 
 async def _drive(prompt: str) -> int:
@@ -212,7 +232,7 @@ async def _drive(prompt: str) -> int:
         sys.stderr.write(f"{RED}!{RESET} ANTHROPIC_API_KEY is required\n")
         return 2
 
-    options = _build_options()
+    options = build_options()
     stream = Stream()
 
     sys.stdout.write(f"{ACCENT}>{RESET} {prompt}\n")

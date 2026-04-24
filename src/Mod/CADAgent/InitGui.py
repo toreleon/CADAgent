@@ -53,8 +53,6 @@ def _auto_open_panel():
         FreeCAD.Console.PrintMessage("CADAgent: module imported\n")
         CADAgent.register_commands()
         FreeCAD.Console.PrintMessage("CADAgent: commands registered\n")
-        CADAgent.add_preferences_page()
-        FreeCAD.Console.PrintMessage("CADAgent: prefs added\n")
         CADAgent.open_panel()
         FreeCAD.Console.PrintMessage("CADAgent: panel opened\n")
     except Exception as exc:
@@ -154,7 +152,6 @@ class CADAgentWorkbench(FreeCADGui.Workbench):
         import CADAgent
 
         CADAgent.register_commands()
-        CADAgent.add_preferences_page()
         self.appendToolbar("CAD Agent", ["CADAgent_OpenPanel"])
         self.appendMenu(
             "CAD Agent",
