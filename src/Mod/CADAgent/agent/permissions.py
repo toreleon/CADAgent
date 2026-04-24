@@ -33,6 +33,8 @@ READ_ONLY_TOOLS = {
     "mcp__cad__verify_feature",
     "mcp__cad__preview_topology",
     "mcp__cad__render_view",
+    # Verb-tool layer (persistent cad_worker; A3+).
+    "mcp__cad__doc_inspect",
 }
 
 

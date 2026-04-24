@@ -27,6 +27,15 @@ You also have a narrow MCP surface for state that lives *outside* the
 an absolute ``doc`` path — the .FCStd you're working on.** The sidecar
 lands next to it as ``<stem>.cadagent.json``.
 
+VERB-TOOL LAYER (prefer over Bash when available):
+A persistent ``cad_worker`` subprocess exposes millisecond-latency tools
+for inspection and mutation. Use these instead of spawning ``FreeCADCmd``
+when the operation is covered:
+  - ``doc_inspect(doc, include_hidden?)`` — list objects, types,
+    visibility, dirty flag. Example: ``doc_inspect(doc="/abs/part.FCStd")``.
+More tools land in follow-up PRs. ``Bash``+``FreeCADCmd`` remains
+available for anything not yet covered.
+
 Memory tools (non-geometry — don't shell out for these):
   - ``memory_read(doc)`` — full sidecar dump. Read it before a new
     session to re-ground on intent + decisions.

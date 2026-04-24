@@ -41,7 +41,7 @@ from claude_agent_sdk import (
 )
 
 from ..prompts_cli import CAD_SYSTEM_PROMPT
-from . import mcp_tools, worker_singleton
+from . import mcp_tools, verb_tools, worker_singleton
 from .subagents import build_agents
 from .worker_client import WorkerClient
 
@@ -193,7 +193,11 @@ def build_options(
     model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7")
     os.environ.setdefault("ANTHROPIC_SMALL_FAST_MODEL", model)
 
-    tool_funcs = list(mcp_tools.TOOL_FUNCS) + list(extra_tools or [])
+    tool_funcs = (
+        list(mcp_tools.TOOL_FUNCS)
+        + list(verb_tools.TOOL_FUNCS)
+        + list(extra_tools or [])
+    )
     server = create_sdk_mcp_server(name="cad", tools=tool_funcs)
 
     # SDK built-ins the agent is allowed to use. Deliberately excluding Edit:
@@ -211,6 +215,7 @@ def build_options(
     ]
     allowed = (
         mcp_tools.allowed_tool_names("cad")
+        + verb_tools.allowed_tool_names("cad")
         + list(extra_allowed_tool_names or [])
         + sdk_builtins
     )

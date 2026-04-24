@@ -22,6 +22,11 @@ from typing import TextIO
 from . import registry
 from .protocol import Request, Response, err, ok
 
+# Importing the handlers package (and its submodules) registers every
+# ``@handler`` decorator. Keep this list explicit so missing imports surface
+# as ImportError at startup rather than as "unknown method" at call time.
+from .handlers import doc as _doc_handlers  # noqa: F401
+
 
 # ---------------------------------------------------------------------------
 # Built-in handlers
@@ -130,4 +135,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # FreeCAD's embedded-interpreter bootstrap clears ``__main__``'s globals
+    # the first time it's imported (confirmed under FreeCAD 1.2). That's
+    # fatal for the stdio loop, which references ``asyncio`` across await
+    # points. Delegate to the same module loaded under its package name —
+    # its globals live in a distinct module object that FreeCAD leaves alone.
+    _cadagent_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..")
+    )
+    if _cadagent_dir not in sys.path:
+        sys.path.insert(0, _cadagent_dir)
+    from agent.worker import server as _server_mod  # type: ignore
+
+    raise SystemExit(_server_mod.main())
