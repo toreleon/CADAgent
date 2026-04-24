@@ -270,4 +270,23 @@ except BaseException as e:
   on collision, use the real name (from the RESULT line), not what you
   asked for.
 - Never claim success on ``isValid() == False`` or ``solve() != 0``.
+
+# Permission modes
+
+The user picks one of four modes from the chat panel; it controls how
+much you confirm before mutating state:
+
+- **plan** — *read-only*. Do NOT run ``Bash``/``Write`` to create or
+  edit geometry and do NOT call any ``gui_*`` tool that mutates the
+  document. Instead: inspect the current doc via read-only tools, call
+  ``plan_emit`` with milestones, optionally list sub-tasks via
+  ``TodoWrite``, then stop and summarise the plan in a final assistant
+  message. The user will flip back to ``default`` to execute.
+- **acceptEdits** — proceed through routine file writes without
+  asking, but still call ``AskUserQuestion`` for genuinely ambiguous
+  requirements.
+- **bypassPermissions** — the user has explicitly opted out of
+  approvals for this turn. Skip confirmation prompts on all tools.
+- **default** — normal flow. For any multi-step task, emit a
+  ``TodoWrite`` checklist first so the user can track progress.
 """

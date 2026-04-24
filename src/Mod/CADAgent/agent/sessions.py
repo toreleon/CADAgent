@@ -61,6 +61,53 @@ def index_path(doc) -> str:
     return os.path.join(unsaved_dir, f"{doc.Name}.cadagent.sessions.json")
 
 
+def _transcript_dir(doc) -> str:
+    """Directory holding per-session row transcripts beside the index."""
+    idx = index_path(doc)
+    # strip trailing ".json" → "<base>.cadagent.sessions"; append ".d"
+    d = (idx[:-5] if idx.endswith(".json") else idx) + ".d"
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def transcript_path(doc, session_id: str) -> str:
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_")
+    return os.path.join(_transcript_dir(doc), f"{safe}.json")
+
+
+def save_rows(doc, session_id: str, rows: list) -> str:
+    """Atomically write the full ``_rows`` list for a session."""
+    path = transcript_path(doc, session_id)
+    payload = {"schema_version": SCHEMA_VERSION, "rows": list(rows or [])}
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        prefix=".cadagent-transcript-", dir=os.path.dirname(path)
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def load_rows(doc, session_id: str) -> list:
+    path = transcript_path(doc, session_id)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    rows = data.get("rows") if isinstance(data, dict) else None
+    return list(rows) if isinstance(rows, list) else []
+
+
 def load(doc) -> dict:
     path = index_path(doc)
     if not os.path.exists(path):
@@ -168,8 +215,14 @@ def delete(doc, session_id: str) -> bool:
     data = load(doc)
     sessions = data.get("sessions") or []
     new_sessions = [s for s in sessions if s.get("id") != session_id]
-    if len(new_sessions) == len(sessions):
-        return False
-    data["sessions"] = new_sessions
-    _save(doc, data)
-    return True
+    removed = len(new_sessions) != len(sessions)
+    if removed:
+        data["sessions"] = new_sessions
+        _save(doc, data)
+    try:
+        tpath = transcript_path(doc, session_id)
+        if os.path.exists(tpath):
+            os.unlink(tpath)
+    except OSError:
+        pass
+    return removed

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import os
 import threading
 import traceback
@@ -89,6 +90,7 @@ class _PanelProxy(QtCore.QObject):
     subagentSpan = QtCore.Signal(str, str, str)
     permissionModeChanged = QtCore.Signal(str)
     streamState = QtCore.Signal(str, bool)
+    todosUpdate = QtCore.Signal(object)
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -106,6 +108,10 @@ class _PanelProxy(QtCore.QObject):
             self.sessionChanged.connect(panel.on_session_changed)
         if hasattr(panel, "set_stream_state"):
             self.streamState.connect(panel.set_stream_state)
+        if hasattr(panel, "update_todos"):
+            self.todosUpdate.connect(panel.update_todos)
+        if hasattr(panel, "upsert_milestone"):
+            self.milestoneUpsert.connect(panel.upsert_milestone)
 
     def _on_permission_request(self, tool_name, tool_input, cf_future):
         try:
@@ -211,6 +217,14 @@ class DockRuntime:
         self._ready = threading.Event()
         self._current_future: concurrent.futures.Future | None = None
         self._workspace_path: str | None = None
+        self._resume_sid: str | None = None
+        # tool_use_ids we've consumed into richer surfaces (todos / plan_*);
+        # their tool_result messages are suppressed so the generic "(tool
+        # result)" fallback doesn't leak into the transcript.
+        self._suppressed_tool_ids: set[str] = set()
+        # tool_use_id -> plan_* short name, so we can parse the result of
+        # plan_emit into milestoneUpsert events once it arrives.
+        self._plan_tool_ids: dict[str, str] = {}
 
     # --- worker thread -------------------------------------------------
 
@@ -248,6 +262,9 @@ class DockRuntime:
         api_key = params.GetString("ApiKey", "") or os.environ.get("ANTHROPIC_API_KEY", "")
         base_url = params.GetString("BaseURL", "") or os.environ.get("ANTHROPIC_BASE_URL", "")
         model = params.GetString("Model", "") or os.environ.get("ANTHROPIC_MODEL", "")
+        mode = params.GetString("PermissionMode", "") or "default"
+        if mode not in ("default", "acceptEdits", "plan", "bypassPermissions"):
+            mode = "default"
         if not api_key:
             raise RuntimeError(
                 "No LLM API key configured. Use the CAD Agent menu → "
@@ -263,11 +280,15 @@ class DockRuntime:
         # tools (which key off the sidecar path) operate on the right doc.
         if self._workspace_path:
             os.environ["CADAGENT_DOC"] = self._workspace_path
+        extra_opts: dict[str, Any] = {}
+        if self._resume_sid:
+            extra_opts["resume"] = self._resume_sid
         options = cli_runtime.build_options(
             extra_tools=dock_tools.TOOL_FUNCS,
             extra_allowed_tool_names=dock_tools.allowed_tool_names("cad"),
-            permission_mode="default",
+            permission_mode=mode,
             can_use_tool=make_can_use_tool(self._proxy),
+            **extra_opts,
         )
         self.client = ClaudeSDKClient(options=options)
         await self.client.__aenter__()
@@ -288,6 +309,10 @@ class DockRuntime:
                 gui_thread.run_sync(_reload_active_doc_if_stale, timeout=30.0)
             except Exception:
                 pass
+            # Drop per-turn bookkeeping so stale ids don't leak across turns
+            # or across resumes.
+            self._suppressed_tool_ids.clear()
+            self._plan_tool_ids.clear()
             self._proxy.turnComplete.emit()
 
     def _route_message(self, msg) -> None:
@@ -311,11 +336,7 @@ class DockRuntime:
                 if isinstance(block, TextBlock):
                     pass  # already streamed via deltas
                 elif isinstance(block, ToolUseBlock):
-                    self._proxy.toolUse.emit(
-                        getattr(block, "id", ""),
-                        _strip_prefix(block.name),
-                        block.input,
-                    )
+                    self._handle_tool_use(block)
                 elif isinstance(block, ThinkingBlock):
                     self._proxy.thinking.emit(block.thinking)
         elif isinstance(msg, UserMessage):
@@ -323,16 +344,99 @@ class DockRuntime:
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, ToolResultBlock):
-                        self._proxy.toolResult.emit(
-                            getattr(block, "tool_use_id", ""),
-                            block.content,
-                            bool(getattr(block, "is_error", False) or False),
-                        )
+                        self._handle_tool_result(block)
         elif isinstance(msg, ResultMessage):
             sid = getattr(msg, "session_id", None)
             if sid:
                 self._proxy.sessionChanged.emit(sid)
             self._proxy.resultMsg.emit(msg)
+
+    # --- tool routing helpers ------------------------------------------
+    #
+    # TodoWrite and plan_* tool calls are rendered as dedicated panel
+    # surfaces (checklist / milestone rows) instead of generic tool rows.
+    # We consume them here and record their tool_use_ids so the matching
+    # ToolResultBlock is also suppressed.
+    def _handle_tool_use(self, block: ToolUseBlock) -> None:
+        tool_id = getattr(block, "id", "") or ""
+        short = _strip_prefix(block.name)
+        tool_input = block.input or {}
+
+        if short == "TodoWrite":
+            todos = tool_input.get("todos") if isinstance(tool_input, dict) else None
+            self._proxy.todosUpdate.emit(list(todos or []))
+            if tool_id:
+                self._suppressed_tool_ids.add(tool_id)
+            return
+
+        if short.startswith("plan_"):
+            if tool_id:
+                self._plan_tool_ids[tool_id] = short
+                self._suppressed_tool_ids.add(tool_id)
+            if short in ("plan_milestone_activate",
+                         "plan_milestone_done",
+                         "plan_milestone_failed"):
+                mid = tool_input.get("milestone_id") if isinstance(tool_input, dict) else None
+                status = {
+                    "plan_milestone_activate": "active",
+                    "plan_milestone_done": "done",
+                    "plan_milestone_failed": "failed",
+                }[short]
+                if mid:
+                    self._proxy.milestoneUpsert.emit(str(mid), "", status, None, None)
+            return
+
+        self._proxy.toolUse.emit(tool_id, short, tool_input)
+
+    def _handle_tool_result(self, block: ToolResultBlock) -> None:
+        tool_id = getattr(block, "tool_use_id", "") or ""
+        plan_name = self._plan_tool_ids.pop(tool_id, None)
+        if plan_name == "plan_emit":
+            self._emit_plan_milestones(block)
+            self._suppressed_tool_ids.discard(tool_id)
+            return
+        if tool_id in self._suppressed_tool_ids:
+            self._suppressed_tool_ids.discard(tool_id)
+            return
+        self._proxy.toolResult.emit(
+            tool_id,
+            block.content,
+            bool(getattr(block, "is_error", False) or False),
+        )
+
+    def _emit_plan_milestones(self, block: ToolResultBlock) -> None:
+        """Parse ``plan_emit``'s JSON result and fan out milestone rows."""
+        content = block.content
+        text = ""
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = part.get("text") or ""
+                    break
+        elif isinstance(content, str):
+            text = content
+        if not text:
+            return
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            return
+        plan = (payload or {}).get("plan") or {}
+        milestones = plan.get("milestones") if isinstance(plan, dict) else None
+        if not isinstance(milestones, list) or not milestones:
+            return
+        total = len(milestones)
+        for i, m in enumerate(milestones):
+            if not isinstance(m, dict):
+                continue
+            mid = m.get("id") or m.get("milestone_id")
+            title = m.get("title") or ""
+            status = m.get("status") or "pending"
+            if not mid:
+                continue
+            self._proxy.milestoneUpsert.emit(
+                str(mid), str(title), str(status), i + 1, total
+            )
 
     # --- entry points --------------------------------------------------
 
@@ -374,6 +478,29 @@ class DockRuntime:
         )
 
     def start_new_session(self) -> bool:
+        if self._turn_in_flight():
+            return False
+        self._resume_sid = None
+        if self.client is not None and self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
+        return True
+
+    def resume_session(self, session_id: str) -> bool:
+        """Tear down the current client and arrange the next turn to resume ``session_id``."""
+        if self._turn_in_flight():
+            return False
+        self._resume_sid = session_id or None
+        if self.client is not None and self._loop is not None:
+            asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
+        return True
+
+    def rebuild_for_mode(self) -> bool:
+        """Drop the live client so the next turn re-reads ``PermissionMode``.
+
+        The param is updated by ``QmlChatBridge.set_permission_mode``; we just
+        need to ensure the SDK options are rebuilt. ``_resume_sid`` is
+        preserved so a resumed session stays resumed across mode switches.
+        """
         if self._turn_in_flight():
             return False
         if self.client is not None and self._loop is not None:

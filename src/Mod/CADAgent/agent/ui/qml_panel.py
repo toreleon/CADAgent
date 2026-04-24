@@ -105,6 +105,9 @@ class MessagesModel(QtCore.QAbstractListModel):
         self._milestone_index: dict[str, int] = {}
         self._row_by_id: dict[str, int] = {}
         self._next_row_id: int = 0
+        # TodoWrite replaces a single row in place — same open/reuse pattern
+        # as the thinking ticker.
+        self._todos_row: int | None = None
         # When the planner delegates to a subagent, subsequent rows inherit
         # meta.agent = <name> until end_subagent() clears it. None = main.
         self._current_agent: str | None = None
@@ -176,6 +179,7 @@ class MessagesModel(QtCore.QAbstractListModel):
         self._perm_index.clear()
         self._milestone_index.clear()
         self._row_by_id.clear()
+        self._todos_row = None
         self._current_agent = None
         self.endResetModel()
 
@@ -476,6 +480,98 @@ class MessagesModel(QtCore.QAbstractListModel):
         row["meta"] = meta
         self._emit_changed(idx)
 
+    # TodoWrite surface — a single reusable "todos" row that is upserted
+    # every time the model calls the TodoWrite tool, Claude-Code style. We
+    # render the checklist in QML (``todosRow``) instead of as a raw tool row.
+    def upsert_todos(self, todos: list) -> None:
+        norm: list[dict] = []
+        for t in todos or []:
+            if not isinstance(t, dict):
+                continue
+            norm.append({
+                "content": str(t.get("content") or ""),
+                "status": str(t.get("status") or "pending"),
+                "activeForm": str(t.get("activeForm") or ""),
+            })
+        if getattr(self, "_todos_row", None) is not None:
+            idx = self._todos_row
+            if 0 <= idx < len(self._rows):
+                row = self._rows[idx]
+                meta = dict(row.get("meta") or {})
+                meta["todos"] = norm
+                row["meta"] = meta
+                self._emit_changed(idx)
+                return
+        self._close_assistant()
+        self._collapse_thinking()
+        self._todos_row = self._append({
+            "kind": "todos",
+            "text": "",
+            "meta": {"todos": norm},
+        })
+
+    # --- Persistence -------------------------------------------------
+
+    def snapshot(self) -> list[dict]:
+        """Return a deep-copied list of rows suitable for JSON persistence."""
+        return [dict(r, meta=dict(r.get("meta") or {})) for r in self._rows]
+
+    def load_snapshot(self, rows: list) -> None:
+        """Replace model contents with ``rows`` (previously from snapshot()).
+
+        Rebuilds internal indexes so open tool / milestone / permission rows
+        still update in place if a later turn mutates them.
+        """
+        self.beginResetModel()
+        self._rows.clear()
+        self._open_assistant = None
+        self._open_thinking = None
+        self._tool_index.clear()
+        self._perm_index.clear()
+        self._milestone_index.clear()
+        self._row_by_id.clear()
+        self._todos_row = None
+        self._current_agent = None
+        max_n = -1
+        for src in rows or []:
+            if not isinstance(src, dict):
+                continue
+            row = {
+                "kind": src.get("kind") or "system",
+                "text": src.get("text") or "",
+                "meta": dict(src.get("meta") or {}),
+                "rowId": src.get("rowId") or "",
+            }
+            if not row["rowId"]:
+                row["rowId"] = f"r{max(0, max_n + 1)}"
+            rid = row["rowId"]
+            if rid.startswith("r"):
+                try:
+                    max_n = max(max_n, int(rid[1:]))
+                except ValueError:
+                    pass
+            self._rows.append(row)
+            idx = len(self._rows) - 1
+            self._row_by_id[rid] = idx
+            kind = row["kind"]
+            meta = row["meta"]
+            if kind == "tool":
+                tid = meta.get("toolId")
+                if tid and meta.get("status") == "…":
+                    self._tool_index[tid] = idx
+            elif kind == "perm":
+                pid = meta.get("reqId")
+                if pid and meta.get("pending"):
+                    self._perm_index[pid] = idx
+            elif kind == "milestone":
+                mid = meta.get("milestoneId")
+                if mid:
+                    self._milestone_index[mid] = idx
+            elif kind == "todos":
+                self._todos_row = idx
+        self._next_row_id = max_n + 1
+        self.endResetModel()
+
 
 class QmlChatBridge(QtCore.QObject):
     """Slots + properties consumed by QML. Owns the model on behalf of the view."""
@@ -546,6 +642,13 @@ class QmlChatBridge(QtCore.QObject):
                 ).SetString("PermissionMode", mode)
             except Exception:
                 pass
+            # Tear down the live SDK client so the next turn re-reads the
+            # new mode. No-op if the user switches mid-turn.
+            if self._runtime is not None:
+                try:
+                    self._runtime.rebuild_for_mode()
+                except Exception:
+                    pass
         self.permissionModeChanged.emit()
         self.set_bypass(mode == "bypassPermissions")
 
@@ -581,6 +684,8 @@ class QmlChatBridge(QtCore.QObject):
         if self._runtime is None:
             self._model.add_error(translate("CADAgent", "Agent runtime not ready."))
             return
+        if self._panel is not None and not self._panel._first_prompt:
+            self._panel._first_prompt = text
         self._model.add_user(text)
         self.set_busy(True)
         self._runtime.submit(text)
@@ -603,28 +708,60 @@ class QmlChatBridge(QtCore.QObject):
                 translate("CADAgent", "Finish or stop the current turn first.")
             )
             return
+        if self._panel is not None:
+            self._panel._first_prompt = None
+            self._panel._current_session_id = None
         self._model.clear()
         self._model.add_system(
             translate("CADAgent", "CAD Agent ready. Ask me to model something.")
         )
 
-    @QtCore.Slot()
-    def showHistory(self) -> None:
-        # Full popup deferred; enumerate sessions inline so users can see them.
+    @QtCore.Slot(result=str)
+    def listSessions(self) -> str:
+        """Return the session index for the active doc as a JSON string.
+
+        Emitted to QML so the history popup can populate its ListView. Each
+        entry carries id/title/first_prompt/updated_at/turn_count.
+        """
         if self._panel is None:
+            return "[]"
+        doc = getattr(self._panel, "_bound_doc", None) or App.ActiveDocument
+        if doc is None:
+            return "[]"
+        try:
+            entries = cad_sessions.list_sessions(doc)
+        except Exception:
+            return "[]"
+        return json.dumps(entries)
+
+    @QtCore.Slot(str)
+    def openSession(self, session_id: str) -> None:
+        if self._panel is None or not session_id:
+            return
+        self._panel.open_session(session_id)
+
+    @QtCore.Slot(str)
+    def deleteSession(self, session_id: str) -> None:
+        if self._panel is None or not session_id:
             return
         doc = getattr(self._panel, "_bound_doc", None) or App.ActiveDocument
-        entries = cad_sessions.list_sessions(doc) if doc else []
-        if not entries:
-            self._model.add_system(translate("CADAgent", "No prior sessions."))
+        if doc is None:
             return
-        lines = [
-            translate("CADAgent", "Prior sessions for this document:")
-        ]
-        for e in entries[:10]:
-            title = e.get("title") or (e.get("id", "")[:8])
-            lines.append(f"  • {title}")
-        self._model.add_system("\n".join(lines))
+        try:
+            cad_sessions.delete(doc, session_id)
+        except Exception:
+            pass
+        if self._panel._current_session_id == session_id:
+            # Close the live SDK client too; otherwise the next turn would
+            # re-persist this sid and resurrect the entry we just deleted.
+            if self._runtime is not None:
+                self._runtime.start_new_session()
+            self._panel._current_session_id = None
+            self._panel._first_prompt = None
+            self._model.clear()
+            self._model.add_system(
+                translate("CADAgent", "CAD Agent ready. Ask me to model something.")
+            )
 
     @QtCore.Slot()
     def configureLlm(self) -> None:
@@ -701,6 +838,7 @@ class QmlChatPanel(QtWidgets.QWidget):
 
         self._bound_doc = None
         self._current_session_id: str | None = None
+        self._first_prompt: str | None = None
         self._runtime = None
 
         self.model = MessagesModel(self)
@@ -763,12 +901,20 @@ class QmlChatPanel(QtWidgets.QWidget):
         self.bridge.scrollToEnd.emit()
 
     def announce_tool_use(self, tool_use_id: str, name: str, tool_input) -> None:
-        # AskUserQuestion is rendered as a dedicated "ask" card (see
-        # ask_user_question_threadsafe) — skip the generic tool row so we
-        # don't show a raw JSON dump alongside the interactive card.
-        if name == "AskUserQuestion":
+        # AskUserQuestion / TodoWrite / plan_* are rendered as dedicated
+        # surfaces (ask card, todos checklist, milestone rows). Skip the
+        # generic tool row so we don't show a raw JSON dump alongside.
+        if name == "AskUserQuestion" or name == "TodoWrite":
+            return
+        if name.startswith("plan_"):
             return
         self.model.add_tool_use(tool_use_id or "", name, tool_input or {})
+        self.bridge.scrollToEnd.emit()
+
+    def update_todos(self, todos) -> None:
+        if not isinstance(todos, list):
+            return
+        self.model.upsert_todos(todos)
         self.bridge.scrollToEnd.emit()
 
     def announce_tool_result(self, tool_use_id: str, content, is_error: bool) -> None:
@@ -801,6 +947,55 @@ class QmlChatPanel(QtWidgets.QWidget):
 
     def mark_turn_complete(self) -> None:
         self.bridge.set_busy(False)
+        self._persist_transcript()
+
+    def on_session_changed(self, session_id: str) -> None:
+        """Runtime hands us the SDK's session id at end of each turn."""
+        if not session_id:
+            return
+        self._current_session_id = session_id
+
+    def _active_doc(self):
+        return self._bound_doc or App.ActiveDocument
+
+    def _persist_transcript(self) -> None:
+        sid = self._current_session_id
+        doc = self._active_doc()
+        if not sid or doc is None:
+            return
+        rows = self.model.snapshot()
+        try:
+            cad_sessions.save_rows(doc, sid, rows)
+            cad_sessions.record_turn(doc, sid, self._first_prompt)
+        except Exception as exc:
+            App.Console.PrintWarning(
+                f"CAD Agent: failed to persist session {sid}: {exc}\n"
+            )
+
+    def open_session(self, session_id: str) -> None:
+        """Replay ``session_id``'s saved rows and ask the runtime to resume it."""
+        doc = self._active_doc()
+        if doc is None:
+            self.show_error(translate("CADAgent", "No active document."))
+            return
+        if self._runtime is None:
+            self.show_error(translate("CADAgent", "Agent runtime not ready."))
+            return
+        if not self._runtime.resume_session(session_id):
+            self.show_error(
+                translate("CADAgent", "Finish or stop the current turn first.")
+            )
+            return
+        rows = cad_sessions.load_rows(doc, session_id)
+        self.model.load_snapshot(rows)
+        entry = cad_sessions.find(doc, session_id) or {}
+        self._current_session_id = session_id
+        self._first_prompt = entry.get("first_prompt") or None
+        title = entry.get("title") or session_id[:8]
+        self.model.add_system(
+            translate("CADAgent", "Resumed session: {0}").format(title)
+        )
+        self.bridge.scrollToEnd.emit()
 
     def show_error(self, message: str) -> None:
         self.model.add_error(message)

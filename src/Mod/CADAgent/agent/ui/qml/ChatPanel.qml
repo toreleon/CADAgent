@@ -41,6 +41,43 @@ Rectangle {
     readonly property color errColor: "#e05757"
     readonly property string monoFamily: "Menlo"
 
+    // Single source of truth for the permission modes. The chip label,
+    // the Modes popup, the plan banner, and the Shift+Tab cycle all read
+    // from here.
+    readonly property var modeDefs: [
+        { mode: "default",            icon: "●", title: qsTr("Ask before edits"),
+          desc: qsTr("Claude will ask for approval before making each edit") },
+        { mode: "acceptEdits",        icon: "✎", title: qsTr("Edit automatically"),
+          desc: qsTr("Claude will edit your selected text or the whole file") },
+        { mode: "plan",               icon: "◆", title: qsTr("Plan mode"),
+          desc: qsTr("Claude will explore the code and present a plan before editing") },
+        { mode: "bypassPermissions",  icon: "⛨", title: qsTr("Bypass permissions"),
+          desc: qsTr("Claude will not ask for approval before running potentially dangerous commands") }
+    ]
+
+    function modeTitle(m) {
+        for (var i = 0; i < modeDefs.length; ++i)
+            if (modeDefs[i].mode === m) return modeDefs[i].title
+        return qsTr("Ask before edits")
+    }
+    function modeIcon(m) {
+        for (var i = 0; i < modeDefs.length; ++i)
+            if (modeDefs[i].mode === m) return modeDefs[i].icon
+        return "●"
+    }
+    function modeColor(m) {
+        return m === "bypassPermissions" ? errColor
+             : m === "plan"              ? accent
+             : fgDim
+    }
+    function cycleMode() {
+        var cur = bridge ? bridge.permissionMode : "default"
+        var idx = 0
+        for (var i = 0; i < modeDefs.length; ++i)
+            if (modeDefs[i].mode === cur) { idx = i; break }
+        bridge.setPermissionMode(modeDefs[(idx + 1) % modeDefs.length].mode)
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -80,77 +117,87 @@ Rectangle {
 
             Item { Layout.fillWidth: true }
 
-            // Permission-mode chip → popup menu.
-            ToolButton {
-                id: permChip
-                implicitHeight: 20
+            component TopbarGlyph: ToolButton {
+                property string symbol: ""
+                property string tip: ""
+                implicitWidth: 24
+                implicitHeight: 24
                 ToolTip.visible: hovered
-                ToolTip.text: qsTr("Permission mode")
-                onClicked: permMenu.open()
-                background: Rectangle {
-                    color: "transparent"
-                    border.color: permChip.hovered ? border : borderSoft
-                    border.width: 1
-                    radius: radiusSm
-                }
+                ToolTip.text: tip
+                background: Rectangle { color: "transparent" }
                 contentItem: Text {
-                    text: {
-                        var m = bridge ? bridge.permissionMode : "default"
-                        if (m === "bypassPermissions") return "⛨ bypass"
-                        if (m === "acceptEdits")       return "✎ auto"
-                        if (m === "plan")              return "◆ plan"
-                        return "● default"
-                    }
-                    color: (bridge && bridge.permissionMode === "bypassPermissions") ? errColor
-                         : ((bridge && bridge.permissionMode === "plan") ? accent : fgDim)
-                    font.pixelSize: 10
-                    font.family: monoFamily
+                    text: symbol
+                    color: parent.hovered ? fg : fgDim
+                    font.pixelSize: 13
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
-                    leftPadding: 6
-                    rightPadding: 6
-                }
-                Menu {
-                    id: permMenu
-                    y: permChip.height
-                    Repeater {
-                        model: [
-                            { mode: "default",          label: qsTr("● default  (prompt per tool)") },
-                            { mode: "acceptEdits",      label: qsTr("✎ auto     (accept edits)") },
-                            { mode: "plan",             label: qsTr("◆ plan     (read-only planning)") },
-                            { mode: "bypassPermissions",label: qsTr("⛨ bypass   (no prompts)") }
-                        ]
-                        delegate: MenuItem {
-                            required property var modelData
-                            text: modelData.label
-                            onTriggered: bridge.setPermissionMode(modelData.mode)
-                        }
-                    }
                 }
             }
 
-            Repeater {
-                model: [
-                    { symbol: "＋", tip: qsTr("New chat"),       action: "new" },
-                    { symbol: "⟳", tip: qsTr("History"),        action: "history" },
-                    { symbol: "⚙", tip: qsTr("Configure LLM"),  action: "config" }
-                ]
-                delegate: ToolButton {
-                    required property var modelData
-                    implicitWidth: 24
-                    implicitHeight: 24
+            TopbarGlyph {
+                symbol: "＋"; tip: qsTr("New chat")
+                onClicked: bridge.newChat()
+            }
+            TopbarGlyph {
+                id: historyBtn
+                symbol: "⟳"; tip: qsTr("History")
+                onClicked: {
+                    historyPopup.refresh()
+                    historyPopup.open()
+                }
+            }
+            TopbarGlyph {
+                symbol: "⚙"; tip: qsTr("Configure LLM")
+                onClicked: bridge.configureLlm()
+            }
+        }
+
+        // ── Plan-mode banner ───────────────────────────────────────────
+        // Visible only while the agent is in plan mode. Acts as a passive
+        // reminder + a one-click exit.
+        Rectangle {
+            id: planBanner
+            Layout.fillWidth: true
+            Layout.leftMargin: 6
+            Layout.rightMargin: 6
+            Layout.topMargin: 4
+            visible: bridge && bridge.permissionMode === "plan"
+            height: visible ? 24 : 0
+            color: Qt.rgba(accent.r, accent.g, accent.b, 0.08)
+            border.color: Qt.rgba(accent.r, accent.g, accent.b, 0.35)
+            border.width: 1
+            radius: radiusSm
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 10
+                anchors.rightMargin: 6
+                spacing: 8
+
+                Text {
+                    text: "◆"
+                    color: accent
+                    font.pixelSize: fontMd
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("Plan mode — read-only exploration; I'll present a plan before editing.")
+                    color: fg
+                    font.pixelSize: fontSm
+                    elide: Text.ElideRight
+                }
+                ToolButton {
+                    id: planBannerClose
+                    implicitWidth: 18
+                    implicitHeight: 18
                     ToolTip.visible: hovered
-                    ToolTip.text: modelData.tip
-                    onClicked: {
-                        if (modelData.action === "new")          bridge.newChat()
-                        else if (modelData.action === "history") bridge.showHistory()
-                        else if (modelData.action === "config")  bridge.configureLlm()
-                    }
+                    ToolTip.text: qsTr("Exit plan mode")
+                    onClicked: bridge.setPermissionMode("default")
                     background: Rectangle { color: "transparent" }
                     contentItem: Text {
-                        text: parent.modelData.symbol
-                        color: parent.hovered ? fg : fgDim
-                        font.pixelSize: 13
+                        text: "✕"
+                        color: planBannerClose.hovered ? fg : fgDim
+                        font.pixelSize: fontSm
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
@@ -187,6 +234,7 @@ Rectangle {
                         case "perm":         return permRow
                         case "ask":          return askRow
                         case "milestone":    return milestoneRow
+                        case "todos":        return todosRow
                         case "verification": return verificationRow
                         case "decision":     return decisionRow
                         case "compaction":   return compactionRow
@@ -229,7 +277,13 @@ Rectangle {
             Layout.bottomMargin: 6
             Layout.topMargin: 2
             color: pal.base
-            border.color: input.activeFocus ? accent : border
+            border.color: input.activeFocus
+                        ? accent
+                        : (bridge && bridge.permissionMode === "bypassPermissions"
+                           ? Qt.rgba(errColor.r, errColor.g, errColor.b, 0.45)
+                           : (bridge && bridge.permissionMode === "plan"
+                              ? Qt.rgba(accent.r, accent.g, accent.b, 0.45)
+                              : border))
             border.width: 1
             radius: radiusMd
             implicitHeight: compLayout.implicitHeight + 14
@@ -243,61 +297,132 @@ Rectangle {
                 anchors.bottomMargin: 6
                 spacing: 4
 
-                RowLayout {
+                // ── Input area ────────────────────────────────────────
+                // Plain Enter submits; Shift+Enter inserts a newline.
+                ScrollView {
                     Layout.fillWidth: true
-                    spacing: 6
+                    Layout.preferredHeight: Math.min(Math.max(input.implicitHeight, 22), 160)
+                    clip: true
 
-                    Text {
-                        text: ">"
-                        color: input.activeFocus ? accent : fgDim
-                        font.family: monoFamily
+                    TextArea {
+                        id: input
+                        wrapMode: TextEdit.Wrap
+                        placeholderText: qsTr("Ask the CAD agent… (Enter to send, Shift+Enter for newline)")
+                        background: null
+                        color: fg
+                        selectByMouse: true
                         font.pixelSize: fontMd
-                        Layout.alignment: Qt.AlignTop
-                        Layout.topMargin: 2
-                    }
-
-                    ScrollView {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Math.min(Math.max(input.implicitHeight, 22), 160)
-                        clip: true
-
-                        TextArea {
-                            id: input
-                            wrapMode: TextEdit.Wrap
-                            placeholderText: qsTr("Ask the CAD agent…")
-                            background: null
-                            color: fg
-                            selectByMouse: true
-                            font.pixelSize: fontMd
-                            Keys.onPressed: function (event) {
-                                if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-                                    && (event.modifiers & (Qt.ControlModifier | Qt.MetaModifier))) {
-                                    root.submit()
-                                    event.accepted = true
+                        Keys.onPressed: function (event) {
+                            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                                if (event.modifiers & Qt.ShiftModifier) {
+                                    // Let default newline handling run.
+                                    return
                                 }
+                                root.submit()
+                                event.accepted = true
+                                return
+                            }
+                            // Shift+Tab cycles permission modes. Qt emits
+                            // Key_Backtab on most platforms; the Shift+Tab
+                            // branch is a safety net.
+                            if (event.key === Qt.Key_Backtab
+                                || (event.key === Qt.Key_Tab
+                                    && (event.modifiers & Qt.ShiftModifier))) {
+                                root.cycleMode()
+                                event.accepted = true
                             }
                         }
                     }
                 }
 
+                // ── Bottom control row ───────────────────────────────
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 6
 
-                    Text {
-                        text: qsTr("Ctrl+Enter to send")
-                        color: fgMuted
-                        font.pixelSize: 10
-                        font.family: monoFamily
+                    // Left cluster: quick-action glyphs (new chat, slash).
+                    ToolButton {
+                        id: composerNewBtn
+                        implicitWidth: 22
+                        implicitHeight: 22
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("New chat")
+                        onClicked: bridge.newChat()
+                        background: Rectangle { color: "transparent" }
+                        contentItem: Text {
+                            text: "＋"
+                            color: composerNewBtn.hovered ? fg : fgDim
+                            font.pixelSize: 13
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    ToolButton {
+                        id: composerSlashBtn
+                        implicitWidth: 22
+                        implicitHeight: 22
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Insert slash command")
+                        onClicked: {
+                            if (!input.text.startsWith("/")) {
+                                input.insert(0, "/")
+                            }
+                            input.forceActiveFocus()
+                            input.cursorPosition = input.text.length
+                        }
+                        background: Rectangle { color: "transparent" }
+                        contentItem: Text {
+                            text: "/"
+                            color: composerSlashBtn.hovered ? fg : fgDim
+                            font.pixelSize: 12
+                            font.family: monoFamily
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
                     }
 
                     Item { Layout.fillWidth: true }
 
+                    // Permission-mode chip — opens the top-level Modes
+                    // popup (anchored to this button via mapToItem).
+                    ToolButton {
+                        id: permChip
+                        implicitHeight: 22
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Permission mode  (⇧+Tab to cycle)")
+                        onClicked: modesPopup.open()
+                        background: Rectangle {
+                            color: bridge && bridge.permissionMode === "bypassPermissions"
+                                   ? Qt.rgba(errColor.r, errColor.g, errColor.b, 0.10)
+                                   : bridge && bridge.permissionMode === "plan"
+                                   ? Qt.rgba(accent.r, accent.g, accent.b, 0.10)
+                                   : "transparent"
+                            border.color: permChip.hovered
+                                        ? root.modeColor(bridge ? bridge.permissionMode : "default")
+                                        : borderSoft
+                            border.width: 1
+                            radius: radiusSm
+                        }
+                        contentItem: Text {
+                            text: (bridge ? root.modeIcon(bridge.permissionMode) : "●")
+                                  + " "
+                                  + (bridge ? root.modeTitle(bridge.permissionMode)
+                                            : qsTr("Ask before edits"))
+                            color: root.modeColor(bridge ? bridge.permissionMode : "default")
+                            font.pixelSize: 10
+                            font.family: monoFamily
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: 8
+                            rightPadding: 8
+                        }
+                    }
+
                     Button {
                         id: stopBtn
                         visible: bridge && bridge.busy
-                        implicitWidth: 22
-                        implicitHeight: 22
+                        implicitWidth: 24
+                        implicitHeight: 24
                         ToolTip.visible: hovered
                         ToolTip.text: qsTr("Stop")
                         onClicked: bridge.stop()
@@ -320,21 +445,24 @@ Rectangle {
                         id: sendBtn
                         visible: !bridge || !bridge.busy
                         enabled: input.text.trim().length > 0
-                        implicitWidth: 22
-                        implicitHeight: 22
+                        implicitWidth: 24
+                        implicitHeight: 24
+                        readonly property color fillColor:
+                            (bridge && bridge.permissionMode === "bypassPermissions")
+                                ? errColor : accent
                         ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Send  (Ctrl+Enter)")
+                        ToolTip.text: qsTr("Send  (Enter)")
                         onClicked: root.submit()
                         background: Rectangle {
-                            color: sendBtn.enabled ? accent : "transparent"
-                            border.color: sendBtn.enabled ? accent : border
+                            color: sendBtn.enabled ? sendBtn.fillColor : "transparent"
+                            border.color: sendBtn.enabled ? sendBtn.fillColor : border
                             border.width: 1
                             radius: radiusSm
                         }
                         contentItem: Text {
-                            text: "↵"
+                            text: "↑"
                             color: sendBtn.enabled ? accentFg : fgMuted
-                            font.pixelSize: 12
+                            font.pixelSize: 13
                             font.bold: true
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -1117,6 +1245,83 @@ Rectangle {
         }
     }
 
+    // Todos checklist — Claude-Code-style todo list. Upserts in place on
+    // each TodoWrite call; each entry renders with a status glyph
+    // (☐ pending, ◐ in_progress, ☒ completed) and strike-through for
+    // completed items.
+    Component {
+        id: todosRow
+        Item {
+            property var rowModel: parent ? parent.rowModel : null
+            property var _todos: (rowModel && rowModel.meta && rowModel.meta.todos)
+                                 ? rowModel.meta.todos : []
+            implicitHeight: todosCol.implicitHeight + 10
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.leftMargin: 6
+                anchors.rightMargin: 6
+                anchors.topMargin: 2
+                anchors.bottomMargin: 2
+                color: Qt.rgba(pal.text.r, pal.text.g, pal.text.b, 0.04)
+                border.color: borderSoft
+                border.width: 1
+                radius: radiusSm
+            }
+
+            Column {
+                id: todosCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                y: 6
+                spacing: 3
+
+                Text {
+                    text: qsTr("Todos")
+                    color: fgMuted
+                    font.pixelSize: 10
+                    font.family: monoFamily
+                    font.bold: true
+                }
+
+                Repeater {
+                    model: _todos
+                    delegate: Row {
+                        required property var modelData
+                        spacing: 6
+                        readonly property string _status: modelData.status || "pending"
+
+                        Text {
+                            text: _status === "completed" ? "☒"
+                                : _status === "in_progress" ? "◐"
+                                : "☐"
+                            color: _status === "completed" ? okColor
+                                 : _status === "in_progress" ? accent
+                                 : fgDim
+                            font.pixelSize: fontMd
+                            font.family: monoFamily
+                            width: 16
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        Text {
+                            text: _status === "in_progress" && modelData.activeForm
+                                  ? modelData.activeForm
+                                  : (modelData.content || "")
+                            color: _status === "completed" ? fgMuted : fg
+                            font.pixelSize: fontMd
+                            font.strikeout: _status === "completed"
+                            font.bold: _status === "in_progress"
+                            wrapMode: Text.Wrap
+                            width: todosCol.width - 22
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Verification row — PostToolUse hook output indented under the parent
     // tool row. "✓" / "✗" per check, with an optional detail line.
     Component {
@@ -1351,6 +1556,330 @@ Rectangle {
                     font.pixelSize: fontSm
                     font.italic: true
                     font.family: monoFamily
+                }
+            }
+        }
+    }
+
+    // ── Modes popup ───────────────────────────────────────────────
+    // Claude-Code-style mode picker: header ("Modes" / "⇧+tab to
+    // switch"), then one row per mode with icon, title, description,
+    // and a checkmark on the currently-active mode.
+    Popup {
+        id: modesPopup
+        width: Math.min(360, root.width - 12)
+        height: modesColumn.implicitHeight + 14
+        padding: 0
+        modal: false
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        x: {
+            if (!permChip) return 6
+            var p = permChip.mapToItem(root, 0, 0)
+            return Math.max(6, Math.min(root.width - width - 6,
+                                        p.x + permChip.width - width))
+        }
+        y: {
+            if (!permChip) return root.height - height - 60
+            var p = permChip.mapToItem(root, 0, 0)
+            return p.y - height - 6
+        }
+
+        background: Rectangle {
+            color: pal.window
+            border.color: border
+            border.width: 1
+            radius: radiusMd
+        }
+
+        contentItem: ColumnLayout {
+            id: modesColumn
+            anchors.fill: parent
+            spacing: 0
+
+            // Header: "Modes" left, "⇧+tab to switch" right.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 8
+                Layout.leftMargin: 12
+                Layout.rightMargin: 12
+                Layout.bottomMargin: 6
+                Text {
+                    text: qsTr("Modes")
+                    color: fg
+                    font.pixelSize: fontMd
+                    font.bold: true
+                }
+                Item { Layout.fillWidth: true }
+                Text {
+                    text: qsTr("⇧+tab to switch")
+                    color: fgMuted
+                    font.pixelSize: 10
+                    font.family: monoFamily
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: borderSoft
+            }
+
+            Repeater {
+                model: root.modeDefs
+                delegate: Rectangle {
+                    id: modeDelegate
+                    required property var modelData
+                    readonly property bool selected: bridge && bridge.permissionMode === modelData.mode
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 52
+                    color: modeMouse.containsMouse
+                           ? Qt.rgba(pal.text.r, pal.text.g, pal.text.b, 0.06)
+                           : "transparent"
+
+                    MouseArea {
+                        id: modeMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            bridge.setPermissionMode(modeDelegate.modelData.mode)
+                            modesPopup.close()
+                        }
+                    }
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 12
+                        spacing: 10
+
+                        Text {
+                            text: modeDelegate.modelData.icon
+                            color: root.modeColor(modeDelegate.modelData.mode)
+                            font.pixelSize: 16
+                            Layout.alignment: Qt.AlignVCenter
+                            Layout.preferredWidth: 18
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 1
+                            Text {
+                                text: modeDelegate.modelData.title
+                                color: fg
+                                font.pixelSize: fontMd
+                                font.bold: modeDelegate.selected
+                            }
+                            Text {
+                                text: modeDelegate.modelData.desc
+                                color: fgMuted
+                                font.pixelSize: fontSm
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+                        }
+                        Text {
+                            text: "✓"
+                            color: root.modeColor(modeDelegate.modelData.mode)
+                            font.pixelSize: fontMd
+                            visible: modeDelegate.selected
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── History popup ─────────────────────────────────────────────
+    // Claude-Code-style session picker: search box on top, list of
+    // prior sessions below (title + relative timestamp), each with a
+    // trash glyph. Clicking a row resumes the session.
+    Popup {
+        id: historyPopup
+        x: {
+            if (!historyBtn) return 0
+            var p = historyBtn.mapToItem(root, 0, 0)
+            return Math.max(6, p.x + historyBtn.width - width)
+        }
+        y: {
+            if (!historyBtn) return 24
+            var p = historyBtn.mapToItem(root, 0, 0)
+            return p.y + historyBtn.height + 4
+        }
+        width: Math.min(360, root.width - 12)
+        height: Math.min(420, Math.max(120, historyList.contentHeight + 72))
+        padding: 0
+        modal: false
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
+        property var entries: []
+        property string filterText: ""
+
+        function _relative(isoStr) {
+            if (!isoStr) return ""
+            var t = Date.parse(isoStr)
+            if (isNaN(t)) return ""
+            var dt = (Date.now() - t) / 1000
+            if (dt < 60)         return qsTr("now")
+            if (dt < 3600)       return Math.floor(dt / 60) + qsTr("m")
+            if (dt < 86400)      return Math.floor(dt / 3600) + qsTr("h")
+            if (dt < 86400 * 30) return Math.floor(dt / 86400) + qsTr("d")
+            return Math.floor(dt / (86400 * 30)) + qsTr("mo")
+        }
+
+        function refresh() {
+            try {
+                entries = JSON.parse(bridge.listSessions() || "[]")
+            } catch (e) {
+                entries = []
+            }
+            filterText = ""
+            searchField.text = ""
+        }
+
+        function _filtered() {
+            if (!filterText) return entries
+            var q = filterText.toLowerCase()
+            var out = []
+            for (var i = 0; i < entries.length; ++i) {
+                var e = entries[i]
+                var t = ((e.title || "") + " " + (e.first_prompt || "")).toLowerCase()
+                if (t.indexOf(q) !== -1) out.push(e)
+            }
+            return out
+        }
+
+        background: Rectangle {
+            color: pal.window
+            border.color: border
+            border.width: 1
+            radius: radiusMd
+        }
+
+        contentItem: ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
+
+            // Search field
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 32
+                color: "transparent"
+                border.color: borderSoft
+                border.width: 0
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 10
+                    anchors.rightMargin: 10
+                    spacing: 6
+                    Text {
+                        text: "⌕"
+                        color: fgMuted
+                        font.pixelSize: fontMd
+                    }
+                    TextField {
+                        id: searchField
+                        Layout.fillWidth: true
+                        placeholderText: qsTr("Search sessions…")
+                        color: fg
+                        placeholderTextColor: fgMuted
+                        background: Rectangle { color: "transparent" }
+                        selectByMouse: true
+                        font.pixelSize: fontMd
+                        onTextChanged: historyPopup.filterText = text
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: borderSoft
+            }
+
+            // Empty state
+            Text {
+                Layout.fillWidth: true
+                Layout.topMargin: 24
+                Layout.bottomMargin: 24
+                horizontalAlignment: Text.AlignHCenter
+                text: qsTr("No prior sessions.")
+                color: fgMuted
+                font.pixelSize: fontSm
+                visible: historyPopup._filtered().length === 0
+            }
+
+            ListView {
+                id: historyList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                visible: historyPopup._filtered().length > 0
+                model: historyPopup._filtered()
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+                delegate: Rectangle {
+                    required property var modelData
+                    property bool rowHovered: rowMouse.containsMouse
+                    width: historyList.width
+                    height: 40
+                    color: rowHovered ? Qt.rgba(pal.text.r, pal.text.g, pal.text.b, 0.06)
+                                      : "transparent"
+
+                    MouseArea {
+                        id: rowMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            bridge.openSession(modelData.id)
+                            historyPopup.close()
+                        }
+                    }
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 8
+                        spacing: 8
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: modelData.title || (modelData.id || "").slice(0, 8)
+                            color: fg
+                            font.pixelSize: fontMd
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            text: historyPopup._relative(modelData.updated_at)
+                            color: fgMuted
+                            font.pixelSize: fontSm
+                            font.family: monoFamily
+                        }
+                        ToolButton {
+                            implicitWidth: 22
+                            implicitHeight: 22
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Delete session")
+                            visible: rowMouse.containsMouse || hovered
+                            background: Rectangle { color: "transparent" }
+                            contentItem: Text {
+                                text: "🗑"
+                                color: parent.hovered ? errColor : fgMuted
+                                font.pixelSize: fontMd
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                            onClicked: {
+                                bridge.deleteSession(modelData.id)
+                                historyPopup.refresh()
+                            }
+                        }
+                    }
                 }
             }
         }
