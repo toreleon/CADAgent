@@ -14,6 +14,16 @@ This repository is the FreeCAD codebase. Use this file as the practical working 
   - `src/Mod/AddonManager`
   - `tests/lib`
 
+## LLM proxy (CAD Agent)
+
+Local LiteLLM proxy:
+
+- `ANTHROPIC_BASE_URL=http://localhost:4141/`
+- `ANTHROPIC_API_KEY=dummy`
+- `ANTHROPIC_MODEL=gpt-5-mini`
+
+Run `scripts/cadagent` with those exported and the CLI will route through the proxy.
+
 ## First-time setup
 
 Initialize submodules before configuring:
