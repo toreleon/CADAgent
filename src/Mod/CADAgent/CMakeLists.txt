@@ -29,6 +29,19 @@ SET(CADAgent_AGENT_CLI
     agent/cli/subagents.py
 )
 
+SET(CADAgent_AGENT_WORKER
+    agent/worker/__init__.py
+    agent/worker/client.py
+    agent/worker/protocol.py
+    agent/worker/registry.py
+    agent/worker/server.py
+)
+
+SET(CADAgent_AGENT_WORKER_HANDLERS
+    agent/worker/handlers/__init__.py
+    agent/worker/handlers/document.py
+)
+
 SET(CADAgent_UI
     agent/ui/__init__.py
     agent/ui/qml_panel.py
@@ -42,6 +55,8 @@ SET(CADAgent_SRCS
     ${CADAgent_TOP}
     ${CADAgent_AGENT}
     ${CADAgent_AGENT_CLI}
+    ${CADAgent_AGENT_WORKER}
+    ${CADAgent_AGENT_WORKER_HANDLERS}
     ${CADAgent_UI}
     ${CADAgent_UI_QML}
 )
@@ -62,6 +77,8 @@ ENDIF (BUILD_GUI)
 INSTALL(FILES ${CADAgent_TOP} ${CADAgent_QRC_SRCS} DESTINATION Mod/CADAgent)
 INSTALL(FILES ${CADAgent_AGENT} DESTINATION Mod/CADAgent/agent)
 INSTALL(FILES ${CADAgent_AGENT_CLI} DESTINATION Mod/CADAgent/agent/cli)
+INSTALL(FILES ${CADAgent_AGENT_WORKER} DESTINATION Mod/CADAgent/agent/worker)
+INSTALL(FILES ${CADAgent_AGENT_WORKER_HANDLERS} DESTINATION Mod/CADAgent/agent/worker/handlers)
 INSTALL(FILES ${CADAgent_UI} DESTINATION Mod/CADAgent/agent/ui)
 INSTALL(FILES ${CADAgent_UI_QML} DESTINATION Mod/CADAgent/agent/ui/qml)
 
