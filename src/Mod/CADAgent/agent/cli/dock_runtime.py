@@ -48,6 +48,7 @@ from claude_agent_sdk import (
 
 from .. import gui_thread, ui_bridge
 from ..permissions import make_can_use_tool
+from ..worker import client as worker_client
 from . import dock_tools, runtime as cli_runtime
 
 
@@ -385,6 +386,10 @@ class DockRuntime:
                 await self.client.__aexit__(None, None, None)
             finally:
                 self.client = None
+        try:
+            await worker_client.close_shared()
+        except Exception:
+            pass
 
     def aclose(self) -> None:
         if self._loop is None:

@@ -25,6 +25,7 @@ from claude_agent_sdk import tool
 from mcp.types import ToolAnnotations
 
 from .. import gui_thread
+from ..worker import client as worker_client
 
 
 _READ_ONLY = ToolAnnotations(readOnlyHint=True)
@@ -219,6 +220,56 @@ async def gui_reload_active_document(args):
         return _err(str(exc), traceback=traceback.format_exc(limit=4))
 
 
+@tool(
+    "gui_inspect_live",
+    (
+        "Fast live introspection of a .FCStd via a long-lived worker "
+        "subprocess. The worker boots FreeCAD once per session, so "
+        "repeated inspects cost a JSON round-trip instead of a fresh "
+        "FreeCADCmd fork. Pass ``path`` the first time; subsequent "
+        "calls against the same doc can omit it. Pass ``obj_name`` to "
+        "inspect one object; omit it for the full tree. ``props`` is an "
+        "optional list of property names to read (e.g. [\"Length\", "
+        "\"Placement\"]) — omit for cheap name/label/type only."
+    ),
+    {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "obj_name": {"type": "string"},
+            "props": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [],
+    },
+    annotations=_READ_ONLY,
+)
+async def gui_inspect_live(args):
+    try:
+        a = args or {}
+        path = (a.get("path") or "").strip()
+        obj_name = a.get("obj_name") or None
+        props = a.get("props") or None
+
+        worker = await worker_client.get_shared()
+        if path:
+            expanded = os.path.abspath(os.path.expanduser(path))
+            if not os.path.exists(expanded):
+                raise FileNotFoundError(expanded)
+            await worker.call("doc.open", path=expanded)
+
+        params: dict[str, Any] = {}
+        if obj_name:
+            params["obj_name"] = obj_name
+        if props:
+            params["props"] = list(props)
+        result = await worker.call("doc.inspect", **params)
+        return _ok(result)
+    except worker_client.WorkerError as exc:
+        return _err(f"worker: {exc}")
+    except Exception as exc:
+        return _err(str(exc), traceback=traceback.format_exc(limit=4))
+
+
 TOOL_FUNCS = [
     gui_documents_list,
     gui_active_document,
@@ -226,6 +277,7 @@ TOOL_FUNCS = [
     gui_open_document,
     gui_set_active_document,
     gui_reload_active_document,
+    gui_inspect_live,
 ]
 
 TOOL_NAMES = [f.name if hasattr(f, "name") else f.__name__ for f in TOOL_FUNCS]
