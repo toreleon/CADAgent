@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import tempfile
 import uuid
 from typing import Any
 
@@ -623,6 +624,7 @@ class QmlChatBridge(QtCore.QObject):
     agentChanged = QtCore.Signal()
     milestoneSummaryChanged = QtCore.Signal()
     scrollToEnd = QtCore.Signal()
+    attachmentsChanged = QtCore.Signal()
 
     def __init__(self, model: MessagesModel, parent=None):
         super().__init__(parent)
@@ -637,6 +639,7 @@ class QmlChatBridge(QtCore.QObject):
         self._pending_perm: dict[str, asyncio.Future] = {}
         self._pending_ask: dict[str, Any] = {}  # concurrent.futures.Future
         self._pending_edit: dict[str, Any] = {}  # concurrent.futures.Future
+        self._attachments: list[dict[str, str]] = []  # [{"path","name"}, ...]
 
     def bind(self, panel: "QmlChatPanel", runtime) -> None:
         self._panel = panel
@@ -721,7 +724,8 @@ class QmlChatBridge(QtCore.QObject):
     @QtCore.Slot(str)
     def submit(self, text: str) -> None:
         text = (text or "").strip()
-        if not text:
+        attachments = [a["path"] for a in self._attachments]
+        if not text and not attachments:
             return
         if self._runtime is None:
             self._model.add_error(translate("CADAgent", "Agent runtime not ready."))
@@ -730,14 +734,76 @@ class QmlChatBridge(QtCore.QObject):
         # the LLM when it's really a local directive.
         if text.startswith("/"):
             if self._handle_slash(text):
+                self._clear_attachments()
                 self.scrollToEnd.emit()
                 return
         if self._panel is not None and not self._panel._first_prompt:
             self._panel._first_prompt = text
-        self._model.add_user(text)
+        display = text
+        if attachments:
+            tag = translate("CADAgent", "[{0} image(s) attached]").format(
+                len(attachments)
+            )
+            display = f"{text}\n{tag}" if text else tag
+        self._model.add_user(display)
         self.set_busy(True)
-        self._runtime.submit(text)
+        self._runtime.submit(text, attachments)
+        self._clear_attachments()
         self.scrollToEnd.emit()
+
+    # --- Clipboard / attachments ------------------------------------
+
+    @QtCore.Property(str, notify=attachmentsChanged)
+    def attachmentsJson(self) -> str:
+        return json.dumps(self._attachments)
+
+    @QtCore.Slot(result=bool)
+    def tryPasteImage(self) -> bool:
+        """Save any image on the clipboard to a temp PNG and attach it.
+
+        Returns True when an image was consumed (the QML caller should then
+        swallow the Ctrl+V so the default text-paste path doesn't also run).
+        """
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return False
+        clip = app.clipboard()
+        md = clip.mimeData()
+        if md is None or not md.hasImage():
+            return False
+        image = clip.image()
+        if image.isNull():
+            return False
+        fd, path = tempfile.mkstemp(prefix="cadagent_paste_", suffix=".png")
+        os.close(fd)
+        if not image.save(path, "PNG"):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            return False
+        self._attachments.append(
+            {"path": path, "name": os.path.basename(path)}
+        )
+        self.attachmentsChanged.emit()
+        return True
+
+    @QtCore.Slot(str)
+    def removeAttachment(self, path: str) -> None:
+        before = len(self._attachments)
+        self._attachments = [a for a in self._attachments if a["path"] != path]
+        if len(self._attachments) != before:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            self.attachmentsChanged.emit()
+
+    def _clear_attachments(self) -> None:
+        if not self._attachments:
+            return
+        self._attachments = []
+        self.attachmentsChanged.emit()
 
     def _handle_slash(self, raw: str) -> bool:
         """Dispatch slash commands. Returns True if consumed."""

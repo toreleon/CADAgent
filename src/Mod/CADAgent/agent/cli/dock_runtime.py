@@ -18,8 +18,10 @@ it after, so the GUI reflects whatever the subprocess wrote.
 from __future__ import annotations
 
 import asyncio
+import base64
 import concurrent.futures
 import json
+import mimetypes
 import os
 import threading
 import traceback
@@ -74,6 +76,42 @@ def _should_auto_plan(text: str) -> bool:
     # Crude multi-feature signal: commas, bullets, or the word "and" appearing
     # more than once usually means the user is describing multiple deliverables.
     return lower.count(",") + lower.count(" and ") + lower.count("\n- ") >= 2
+
+
+async def _multimodal_prompt(user_text: str, attachments: list[str]):
+    """Yield a single Anthropic-format streaming user message with images.
+
+    The SDK forwards each dict to the CLI transport; LiteLLM translates the
+    Anthropic image block to whatever the proxied model expects (e.g. the
+    OpenAI image_url schema for gpt-*).
+    """
+    content: list[dict[str, Any]] = []
+    if user_text:
+        content.append({"type": "text", "text": user_text})
+    for path in attachments:
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            continue
+        mime, _ = mimetypes.guess_type(path)
+        if not mime or not mime.startswith("image/"):
+            mime = "image/png"
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime,
+                    "data": base64.b64encode(data).decode("ascii"),
+                },
+            }
+        )
+    yield {
+        "type": "user",
+        "message": {"role": "user", "content": content},
+        "parent_tool_use_id": None,
+    }
 
 
 def _strip_prefix(name: str) -> str:
@@ -328,21 +366,41 @@ class DockRuntime:
         extra_opts: dict[str, Any] = {}
         if self._resume_sid:
             extra_opts["resume"] = self._resume_sid
+        # Thinking toggle + effort come from the Configure LLM dialog. When
+        # disabled we force ``thinking={"type":"disabled"}`` regardless of
+        # any CADAGENT_THINKING env default; when enabled we honour the user's
+        # effort choice and let build_options derive a sensible thinking
+        # config (adaptive unless CADAGENT_THINKING provides a budget).
+        thinking_enabled = bool(params.GetBool("ThinkingEnabled", False))
+        effort = (params.GetString("ThinkingEffort", "") or "").strip().lower()
+        if thinking_enabled:
+            extra_opts["thinking"] = {"type": "adaptive"}
+            if effort in ("low", "medium", "high", "max"):
+                extra_opts["effort"] = effort
+        else:
+            extra_opts["thinking"] = {"type": "disabled"}
         options = cli_runtime.build_options(
             extra_tools=dock_tools.TOOL_FUNCS,
             extra_allowed_tool_names=dock_tools.allowed_tool_names("cad"),
             permission_mode=mode,
-            can_use_tool=make_can_use_tool(self._proxy),
+            can_use_tool=make_can_use_tool(self._proxy, mode),
             **extra_opts,
         )
         self.client = ClaudeSDKClient(options=options)
         await self.client.__aenter__()
 
-    async def _ask(self, user_text: str) -> None:
+    async def _ask(
+        self, user_text: str, attachments: list[str] | None = None
+    ) -> None:
         try:
             await self._ensure_client()
             assert self.client is not None
-            await self.client.query(user_text)
+            if attachments:
+                await self.client.query(
+                    _multimodal_prompt(user_text, attachments)
+                )
+            else:
+                await self.client.query(user_text)
             async for msg in self.client.receive_response():
                 self._route_message(msg)
         except Exception as exc:
@@ -538,7 +596,9 @@ class DockRuntime:
 
     # --- entry points --------------------------------------------------
 
-    def submit(self, user_text: str) -> None:
+    def submit(
+        self, user_text: str, attachments: list[str] | None = None
+    ) -> None:
         if (
             self._current_future is not None
             and not self._current_future.done()
@@ -568,7 +628,7 @@ class DockRuntime:
         wrapped = f"{_build_preamble(snap)}\n\n{user_text}"
         loop = self._ensure_loop()
         self._current_future = asyncio.run_coroutine_threadsafe(
-            self._ask(wrapped), loop
+            self._ask(wrapped, attachments), loop
         )
 
     def interrupt(self) -> None:

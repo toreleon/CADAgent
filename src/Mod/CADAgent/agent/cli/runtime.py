@@ -219,12 +219,46 @@ def build_options(
         system_prompt=CAD_SYSTEM_PROMPT,
         mcp_servers={"cad": server},
         allowed_tools=allowed,
-        agents=build_agents(),
+        agents=build_agents(model),
         permission_mode=os.environ.get("CADAGENT_PERMS", "bypassPermissions"),
         include_partial_messages=True,
+        **_thinking_kwargs(),
     )
     kwargs.update(overrides)
     return ClaudeAgentOptions(**kwargs)
+
+
+def _thinking_kwargs() -> dict[str, Any]:
+    """Translate ``CADAGENT_THINKING`` into SDK thinking / effort fields.
+
+    Extended reasoning is verbose and expensive when routed through LiteLLM
+    to small models like ``gpt-5-mini`` — default it off. Users who want it
+    back can set:
+
+    * ``CADAGENT_THINKING=off``          — disabled (default)
+    * ``CADAGENT_THINKING=adaptive``     — model decides per turn
+    * ``CADAGENT_THINKING=<int>``        — enabled with that token budget
+    * ``CADAGENT_EFFORT=low|medium|high|max`` — optional effort hint
+    """
+    out: dict[str, Any] = {}
+    raw = (os.environ.get("CADAGENT_THINKING") or "").strip().lower()
+    if raw in ("", "off", "disabled", "none", "0"):
+        out["thinking"] = {"type": "disabled"}
+    elif raw == "adaptive":
+        out["thinking"] = {"type": "adaptive"}
+    else:
+        try:
+            budget = int(raw)
+            if budget > 0:
+                out["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            else:
+                out["thinking"] = {"type": "disabled"}
+        except ValueError:
+            out["thinking"] = {"type": "disabled"}
+    effort = (os.environ.get("CADAGENT_EFFORT") or "").strip().lower()
+    if effort in ("low", "medium", "high", "max"):
+        out["effort"] = effort
+    return out
 
 
 async def _drive(prompt: str) -> int:

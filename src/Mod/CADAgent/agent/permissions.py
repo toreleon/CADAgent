@@ -30,20 +30,51 @@ MUTATING_TOOLS = {
 
 
 # Tools that never mutate the document — auto-allow to keep the UX snappy.
+# Kept in sync with the ``annotations=_READ_ONLY`` calls in dock_tools.py /
+# mcp_tools.py and the harmless SDK built-ins.
 READ_ONLY_TOOLS = {
-    "mcp__cad__list_documents",
-    "mcp__cad__get_active_document",
-    "mcp__cad__list_objects",
-    "mcp__cad__get_object",
-    "mcp__cad__get_selection",
-    "mcp__cad__recompute_and_fit",
-    "mcp__cad__read_project_memory",
-    "mcp__cad__get_parameters",
-    # Diagnostics (Slice 4 will add render_view etc).
-    "mcp__cad__verify_sketch",
-    "mcp__cad__verify_feature",
-    "mcp__cad__preview_topology",
-    "mcp__cad__render_view",
+    # SDK built-ins
+    "Read",
+    "Grep",
+    "Glob",
+    "TodoWrite",  # informational checklist, consumed by the runtime
+    # MCP cad — inspection
+    "mcp__cad__gui_documents_list",
+    "mcp__cad__gui_active_document",
+    "mcp__cad__gui_inspect_live",
+    # MCP cad — memory / plan reads
+    "mcp__cad__memory_read",
+    "mcp__cad__memory_parameters_get",
+    "mcp__cad__memory_decisions_list",
+    "mcp__cad__plan_active_get",
+}
+
+
+# Plan-metadata tools are consumed by the dock runtime itself (the results are
+# turned into milestone rows / plan files). They never reach the user as a
+# prompt regardless of mode.
+PLAN_META_TOOLS = {
+    "mcp__cad__plan_emit",
+    "mcp__cad__plan_milestone_activate",
+    "mcp__cad__plan_milestone_done",
+    "mcp__cad__plan_milestone_failed",
+    "mcp__cad__exit_plan_mode",
+}
+
+
+# File-edit-class tools. Under ``acceptEdits`` mode these auto-allow; Bash is
+# deliberately *not* in this set (shell execution stays gated, matching the
+# Claude Code convention where acceptEdits covers edits but not arbitrary
+# command execution).
+FILE_EDIT_TOOLS = {
+    "Write",
+    "mcp__cad__gui_new_document",
+    "mcp__cad__gui_open_document",
+    "mcp__cad__gui_set_active_document",
+    "mcp__cad__gui_reload_active_document",
+    "mcp__cad__memory_note_write",
+    "mcp__cad__memory_parameter_set",
+    "mcp__cad__memory_decision_record",
 }
 
 
@@ -128,13 +159,27 @@ def session_allowlist() -> set[str]:
     return set(_SESSION_ALLOWLIST)
 
 
-def make_can_use_tool(proxy):
+def make_can_use_tool(proxy, permission_mode: str = "default"):
     """Return a `can_use_tool` coroutine that asks the GUI thread via `proxy`.
 
     `proxy` is a `_PanelProxy` QObject whose `permissionRequest` signal is
     connected to a slot that creates a card on the panel and resolves the
     provided concurrent.futures.Future on Apply / Reject.
+
+    ``permission_mode`` is the effective mode for the current SDK client.
+    When the SDK receives a ``can_use_tool`` callback, it delegates every
+    decision to us regardless of its own permission mode — so we replicate
+    the mode semantics here:
+
+    * ``bypassPermissions`` — allow everything without prompting.
+    * ``acceptEdits`` — auto-allow mutating tools; still prompt for anything
+      else that isn't explicitly read-only.
+    * ``default`` / ``plan`` — prompt as before.
     """
+
+    auto_allow_all = permission_mode == "bypassPermissions"
+    auto_allow_edits = permission_mode == "acceptEdits"
+    plan_only = permission_mode == "plan"
 
     async def can_use_tool(tool_name, tool_input, context=None):
         # AskUserQuestion is a built-in SDK tool. Per the Agent SDK docs, the
@@ -165,6 +210,31 @@ def make_can_use_tool(proxy):
             )
 
         if tool_name in READ_ONLY_TOOLS or is_dry_run(tool_input):
+            return PermissionResultAllow(updated_input=tool_input)
+
+        # Plan-meta tools are always allowed — the dock runtime consumes
+        # their results to render milestone rows / plan files; prompting for
+        # them would break the plan-mode handshake.
+        if tool_name in PLAN_META_TOOLS:
+            return PermissionResultAllow(updated_input=tool_input)
+
+        if auto_allow_all:
+            return PermissionResultAllow(updated_input=tool_input)
+
+        # Plan mode: block every remaining tool without prompting. The agent
+        # is expected to research via read-only tools and call
+        # ``exit_plan_mode``; any mutating call is a protocol violation and
+        # should fail fast so the user can review the plan first.
+        if plan_only:
+            return PermissionResultDeny(
+                message=(
+                    "Plan mode is active — tool execution is disabled until "
+                    "the agent calls exit_plan_mode and the user approves "
+                    "the plan."
+                )
+            )
+
+        if auto_allow_edits and tool_name in FILE_EDIT_TOOLS:
             return PermissionResultAllow(updated_input=tool_input)
 
         if tool_name in _SESSION_ALLOWLIST:

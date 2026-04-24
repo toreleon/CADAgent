@@ -12,6 +12,8 @@ makes the contract explicit; Phase 4 validation will confirm the agent obeys.
 
 from __future__ import annotations
 
+import os
+
 from claude_agent_sdk import AgentDefinition
 
 from . import mcp_tools
@@ -163,13 +165,29 @@ unresolved constraints the solver flagged.
 """
 
 
-def build_agents() -> dict[str, AgentDefinition]:
-    """AgentDefinition map for ClaudeAgentOptions.agents.
+def build_agents(model: str | None = None) -> dict[str, AgentDefinition]:
+    """AgentDefinition map for ``ClaudeAgentOptions.agents``.
+
+    ``model`` is the concrete model id the parent session is using (e.g.
+    ``glm-5.1`` / ``gpt-5-mini`` via a LiteLLM proxy, or ``claude-opus-4-7``).
+    We pin every subagent to that exact id because the SDK's ``"inherit"``
+    alias is only understood by Anthropic's CLI for its own model aliases —
+    when the parent runs on a proxied / non-Anthropic model the CLI falls
+    back to a hardcoded Anthropic default, which the LiteLLM proxy rejects
+    with 400 (the alias isn't in its ``model_list``).
 
     All subagents get ``Bash``, ``AskUserQuestion``, and the MCP subset they
     need. Read-only subagents get a narrower MCP list but still get ``Bash``
     (soft-enforced by prompt).
     """
+    # Fall back to the env var the runtime already populates before this is
+    # called; only as a last resort use "inherit" so native Anthropic runs
+    # keep working even if no model was passed in.
+    effective = (
+        model
+        or os.environ.get("ANTHROPIC_MODEL")
+        or "inherit"
+    )
     return {
         "reviewer": AgentDefinition(
             description=(
@@ -180,7 +198,7 @@ def build_agents() -> dict[str, AgentDefinition]:
             prompt=REVIEWER_PROMPT,
             tools=["Bash", "Read", "Grep", "Glob", "AskUserQuestion"] + _MEMORY_READ_ONLY,
             permissionMode="default",
-            model="inherit",
+            model=effective,
         ),
         "sketcher": AgentDefinition(
             description=(
@@ -191,7 +209,7 @@ def build_agents() -> dict[str, AgentDefinition]:
             prompt=SKETCHER_PROMPT,
             tools=["Bash", "Read", "Grep", "Glob", "AskUserQuestion"] + _MEMORY_ALL,
             permissionMode="default",
-            model="inherit",
+            model=effective,
         ),
         "assembler": AgentDefinition(
             description=(
@@ -201,6 +219,6 @@ def build_agents() -> dict[str, AgentDefinition]:
             prompt=ASSEMBLER_PROMPT,
             tools=["Bash", "Read", "Grep", "Glob", "AskUserQuestion"] + _MEMORY_ALL,
             permissionMode="default",
-            model="inherit",
+            model=effective,
         ),
     }

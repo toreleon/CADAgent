@@ -65,18 +65,93 @@ Rectangle {
                             return
                         }
                         var text = input.text.trim()
-                        if (text.length > 0) {
+                        if (text.length > 0 || (bridge && bridge.attachmentsJson !== "[]")) {
                             input.clear()
                             composerRoot.submitted(text)
                         }
                         event.accepted = true
                         return
                     }
+                    if (event.key === Qt.Key_V
+                        && (event.modifiers & Qt.ControlModifier)
+                        && !(event.modifiers & Qt.ShiftModifier)) {
+                        if (bridge && bridge.tryPasteImage()) {
+                            event.accepted = true
+                            return
+                        }
+                    }
                     if (event.key === Qt.Key_Backtab
                         || (event.key === Qt.Key_Tab
                             && (event.modifiers & Qt.ShiftModifier))) {
                         theme.cycleMode()
                         event.accepted = true
+                    }
+                }
+            }
+        }
+
+        Flow {
+            id: attachmentsRow
+            Layout.fillWidth: true
+            spacing: 4
+            visible: attachmentsModel.count > 0
+
+            property var items: []
+            function refresh() {
+                var json = bridge ? bridge.attachmentsJson : "[]"
+                try {
+                    attachmentsRow.items = JSON.parse(json)
+                } catch (e) {
+                    attachmentsRow.items = []
+                }
+                attachmentsModel.clear()
+                for (var i = 0; i < attachmentsRow.items.length; ++i) {
+                    attachmentsModel.append(attachmentsRow.items[i])
+                }
+            }
+
+            ListModel { id: attachmentsModel }
+
+            Connections {
+                target: bridge
+                function onAttachmentsChanged() { attachmentsRow.refresh() }
+            }
+            Component.onCompleted: attachmentsRow.refresh()
+
+            Repeater {
+                model: attachmentsModel
+                delegate: Rectangle {
+                    radius: radiusSm
+                    color: Qt.rgba(accent.r, accent.g, accent.b, 0.10)
+                    border.color: borderSoft
+                    border.width: 1
+                    implicitHeight: 20
+                    implicitWidth: chipRow.implicitWidth + 10
+                    RowLayout {
+                        id: chipRow
+                        anchors.fill: parent
+                        anchors.leftMargin: 5
+                        anchors.rightMargin: 2
+                        spacing: 4
+                        Text {
+                            text: "🖼 " + (model.name || "image")
+                            color: fg
+                            font.pixelSize: fontSm
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+                        ToolButton {
+                            implicitWidth: 16
+                            implicitHeight: 16
+                            onClicked: bridge.removeAttachment(model.path)
+                            background: Rectangle { color: "transparent" }
+                            contentItem: Text {
+                                text: "✕"
+                                color: fgDim
+                                font.pixelSize: 10
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
                     }
                 }
             }
@@ -188,6 +263,7 @@ Rectangle {
                 id: sendBtn
                 visible: !bridge || !bridge.busy
                 enabled: input.text.trim().length > 0
+                         || (bridge && bridge.attachmentsJson !== "[]")
                 implicitWidth: 24
                 implicitHeight: 24
                 readonly property color fillColor:
@@ -197,7 +273,7 @@ Rectangle {
                 ToolTip.text: qsTr("Send  (Enter)")
                 onClicked: {
                     var text = input.text.trim()
-                    if (text.length > 0) {
+                    if (text.length > 0 || (bridge && bridge.attachmentsJson !== "[]")) {
                         input.clear()
                         composerRoot.submitted(text)
                     }

@@ -115,6 +115,29 @@ def _make_configure_llm_command():
         model_edit.setPlaceholderText("claude-opus-4-7")
         form.addRow(translate("CADAgent", "Model"), model_edit)
 
+        # Thinking toggle — off by default (matches the new runtime default).
+        # For Anthropic-native endpoints this controls extended-thinking blocks.
+        # For LiteLLM-fronted providers (GLM, OpenAI, …) the SDK still sends
+        # the field; whether it propagates depends on the proxy's mapping.
+        thinking_box = QtWidgets.QCheckBox(
+            translate("CADAgent", "Enable reasoning / extended thinking"), dlg
+        )
+        thinking_box.setChecked(
+            bool(params.GetBool("ThinkingEnabled", False))
+        )
+        form.addRow("", thinking_box)
+
+        effort_combo = QtWidgets.QComboBox(dlg)
+        effort_combo.addItem(translate("CADAgent", "(default)"), "")
+        for level in ("low", "medium", "high", "max"):
+            effort_combo.addItem(level, level)
+        stored_effort = params.GetString("ThinkingEffort", "")
+        idx = effort_combo.findData(stored_effort)
+        effort_combo.setCurrentIndex(max(0, idx))
+        effort_combo.setEnabled(thinking_box.isChecked())
+        thinking_box.toggled.connect(effort_combo.setEnabled)
+        form.addRow(translate("CADAgent", "Thinking effort"), effort_combo)
+
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
             parent=dlg,
@@ -129,6 +152,10 @@ def _make_configure_llm_command():
         params.SetString("BaseURL", url_edit.text().strip())
         params.SetString("ApiKey", key_edit.text())
         params.SetString("Model", model_edit.text().strip())
+        params.SetBool("ThinkingEnabled", thinking_box.isChecked())
+        params.SetString(
+            "ThinkingEffort", effort_combo.currentData() or ""
+        )
 
         global _RUNTIME
         if _RUNTIME is not None:
