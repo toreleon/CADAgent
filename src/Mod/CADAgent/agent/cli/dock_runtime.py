@@ -931,6 +931,72 @@ class DockRuntime:
         except Exception:
             pass
 
+    async def rewind_to(
+        self,
+        row_id: str,
+        fork: bool,
+        new_user_text: str | None = None,
+    ) -> str:
+        """Rewind the conversation to ``row_id``.
+
+        Closes the live SDK client, truncates the persisted CADAgent rows
+        and the SDK transcript JSONL, optionally restores the workspace
+        ``.FCStd`` snapshot for the matching turn, and arms the next turn to
+        resume the (possibly forked) session.
+
+        Returns the (possibly new) sid. ``new_user_text`` is reserved for
+        callers that compose a new prompt during rewind; the panel layer
+        currently issues the new prompt itself after this method returns.
+
+        Defensive: if any step fails (no rows persisted yet, missing SDK
+        JSONL, no checkpoints module) we fall through and return the best
+        sid we have.
+        """
+        del new_user_text  # reserved; see docstring.
+
+        await self._aclose()
+
+        panel = self.panel
+        doc = (
+            getattr(panel, "_bound_doc", None)
+            or getattr(App, "ActiveDocument", None)
+        )
+        sid = getattr(panel, "_current_session_id", None) or self._resume_sid
+        if not sid or doc is None:
+            return sid or ""
+
+        row_index = -1
+        turn_index: int | None = None
+        try:
+            model = panel.model  # type: ignore[attr-defined]
+            row_by_id = getattr(model, "_row_by_id", {}) or {}
+            row_index = int(row_by_id.get(row_id, -1))
+            if 0 <= row_index < len(model._rows):
+                meta = (model._rows[row_index] or {}).get("meta") or {}
+                ti = meta.get("turn_index")
+                if isinstance(ti, int):
+                    turn_index = ti
+        except Exception:
+            row_index = -1
+
+        try:
+            from .. import rewind as _rewind
+            new_sid = _rewind.truncate_session(doc, sid, row_index, fork)
+        except Exception:
+            new_sid = sid
+
+        if turn_index is not None:
+            try:
+                from .. import checkpoints as _checkpoints
+                doc_path = getattr(doc, "FileName", "") or ""
+                if doc_path:
+                    _checkpoints.restore(new_sid, turn_index, doc_path)
+            except Exception:
+                pass
+
+        self._resume_sid = new_sid
+        return new_sid
+
     def aclose(self) -> None:
         if self._loop is None:
             return
