@@ -11,10 +11,13 @@ SET(CADAgent_TOP
 
 SET(CADAgent_AGENT
     agent/__init__.py
+    agent/checkpoints.py
     agent/gui_thread.py
+    agent/hooks.py
     agent/memory.py
     agent/permissions.py
     agent/prompts_cli.py
+    agent/rewind.py
     agent/sessions.py
     agent/ui_bridge.py
 )
@@ -54,6 +57,7 @@ SET(CADAgent_UI_QML
     agent/ui/qml/HistoryPopup.qml
     agent/ui/qml/ModesPopup.qml
     agent/ui/qml/PlanBanner.qml
+    agent/ui/qml/TodosPanel.qml
     agent/ui/qml/TranscriptView.qml
     agent/ui/qml/WorkspaceChip.qml
 )
@@ -66,9 +70,12 @@ SET(CADAgent_UI_QML_TRANSCRIPT
     agent/ui/qml/transcript/EditApprovalRow.qml
     agent/ui/qml/transcript/ErrorRow.qml
     agent/ui/qml/transcript/FooterRow.qml
+    agent/ui/qml/transcript/HooksStatusRow.qml
+    agent/ui/qml/transcript/MessageEditOverlay.qml
     agent/ui/qml/transcript/MilestoneRow.qml
     agent/ui/qml/transcript/PermissionRow.qml
     agent/ui/qml/transcript/PlanFileRow.qml
+    agent/ui/qml/transcript/RewindButton.qml
     agent/ui/qml/transcript/SubagentRow.qml
     agent/ui/qml/transcript/SystemRow.qml
     agent/ui/qml/transcript/ThinkingRow.qml
