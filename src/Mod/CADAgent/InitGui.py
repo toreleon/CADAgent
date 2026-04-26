@@ -44,20 +44,52 @@ except ImportError:
 translate = FreeCAD.Qt.translate
 
 
-def _auto_open_panel():
-    """Auto-open the CAD Agent chat panel at FreeCAD startup."""
+def _attach_panel_to_host():
+    """Wire the QML chat panel into the C++ ``Gui::CADAgentView`` host.
+
+    Visibility is owned by ``DockWindowManager`` (see StdWorkbench's
+    ``DockWindowItems`` registration). For users whose saved dock layout
+    pre-dates ``Std_CADAgentView``, ``QMainWindow::restoreState`` leaves the
+    new dock unplaced; we detect that case and dock it on the right once.
+    """
     import traceback
     try:
-        FreeCAD.Console.PrintMessage("CADAgent: auto-open start\n")
+        try:
+            from PySide6 import QtCore as _QC, QtWidgets as _QtW
+        except ImportError:
+            from PySide2 import QtCore as _QC, QtWidgets as _QtW
+
         import CADAgent
-        FreeCAD.Console.PrintMessage("CADAgent: module imported\n")
         CADAgent.register_commands()
-        FreeCAD.Console.PrintMessage("CADAgent: commands registered\n")
         CADAgent.open_panel()
-        FreeCAD.Console.PrintMessage("CADAgent: panel opened\n")
+
+        # Guard against pre-existing saved layouts that don't know about the
+        # new Std_CADAgentView dock. Run after a delay so DockWindowManager's
+        # setup() and MainWindow::loadLayoutSettings() have finished.
+        def _ensure_placed():
+            mw = FreeCADGui.getMainWindow()
+            if mw is None:
+                return
+            for d in mw.findChildren(_QtW.QDockWidget):
+                if d.objectName() != "CAD Agent":
+                    continue
+                area = mw.dockWidgetArea(d)
+                # If the dock is floating (top-level window) or stranded with
+                # no area — both happen when restoreState has no entry for the
+                # newly-added Std_CADAgentView — re-dock it on the right.
+                needs_dock = d.isFloating() or area == _QC.Qt.NoDockWidgetArea
+                if needs_dock:
+                    if d.isFloating():
+                        d.setFloating(False)
+                    mw.addDockWidget(_QC.Qt.RightDockWidgetArea, d)
+                    d.setVisible(True)
+                break
+
+        _QC.QTimer.singleShot(0, _ensure_placed)
+        _QC.QTimer.singleShot(1500, _ensure_placed)
     except Exception as exc:
         FreeCAD.Console.PrintError(
-            f"CAD Agent: auto-open failed: {exc}\n"
+            f"CAD Agent: panel attach failed: {exc}\n"
             f"{traceback.format_exc()}\n"
         )
 
@@ -88,12 +120,23 @@ def _install_agent_toolbar():
         try:
             import CADAgent
             CADAgent.register_commands()
+            # Ensure the QML panel is wired to the C++ host before we toggle.
             CADAgent.open_panel()
-            host = mw.findChild(QtWidgets.QDockWidget, "CADAgentChatDock")
-            if host is not None:
-                if host.isHidden():
-                    host.show()
-                host.raise_()
+            # Find the QDockWidget container that DockWindowManager built around
+            # the CADAgentView host. Both the inner view and the container share
+            # the objectName "CAD Agent"; iterate dock widgets to disambiguate.
+            container = None
+            for dw in mw.findChildren(QtWidgets.QDockWidget):
+                if dw.objectName() == "CAD Agent":
+                    container = dw
+                    break
+            if container is None:
+                return
+            if container.isVisible():
+                container.hide()
+            else:
+                container.show()
+                container.raise_()
         except Exception as exc:
             FreeCAD.Console.PrintError(
                 f"CAD Agent: toggle failed: {exc}\n{traceback.format_exc()}\n"
@@ -121,10 +164,11 @@ def _install_agent_toolbar():
     sb.addPermanentWidget(btn, 0)
 
 
-# Open the chat dock automatically at FreeCAD startup (Copilot-style),
-# regardless of which workbench the user lands on. Deferred via a 0-ms
-# timer so the main window is fully constructed first.
-QtCore.QTimer.singleShot(0, _auto_open_panel)
+# Attach the QML chat panel into the C++ host shell (Std_CADAgentView).
+# Visibility itself is managed by FreeCAD's DockWindowManager + saved layout,
+# so this only constructs the panel and binds the runtime — Copilot-style
+# default visibility is set in StdWorkbench::setupDockWindows().
+QtCore.QTimer.singleShot(0, _attach_panel_to_host)
 QtCore.QTimer.singleShot(0, _install_agent_toolbar)
 
 

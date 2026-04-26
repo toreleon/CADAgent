@@ -796,6 +796,7 @@ SOURCE_GROUP("Dialog\\Settings" FILES ${Dialog_Settings_SRCS})
 
 # The dock windows sources
 SET(Dock_Windows_CPP_SRCS
+    CADAgentView.cpp
     ComboView.cpp
     DockWindow.cpp
     PropertyView.cpp
@@ -810,6 +811,7 @@ SET(Dock_Windows_CPP_SRCS
     DAGView/DAGModelGraph.cpp
 )
 SET(Dock_Windows_HPP_SRCS
+    CADAgentView.h
     ComboView.h
     DockWindow.h
     PropertyView.h

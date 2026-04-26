@@ -230,7 +230,13 @@ def register_commands() -> None:
 
 
 def open_panel() -> None:
-    """Create (if needed) and show the dock widget, wiring the runtime."""
+    """Attach the chat panel to its C++ host (if needed) and surface the dock.
+
+    The host is a ``Gui::CADAgentView`` registered by MainWindow with
+    ``DockWindowManager``; visibility is owned by FreeCAD's standard
+    parameter/saved-layout system. This function only ensures the QML panel
+    is attached, the runtime is wired, and the dock is activated/raised.
+    """
     global _RUNTIME
     try:
         _install_asyncio_loop()
@@ -243,8 +249,7 @@ def open_panel() -> None:
     from agent.ui import qml_panel as ChatPanelMod
     from agent.cli.dock_runtime import DockRuntime
 
-    dock = ChatPanelMod.get_or_create_dock()
-    panel = ChatPanelMod.get_panel()
+    panel = ChatPanelMod.attach_panel_to_host()
     if panel is None:
         App.Console.PrintError("CAD Agent: panel failed to construct.\n")
         return
@@ -253,5 +258,14 @@ def open_panel() -> None:
         _RUNTIME = DockRuntime(panel)
         panel.attach_runtime(_RUNTIME)
 
-    dock.show()
-    dock.raise_()
+    # Surface the dock: walk up from the panel to find the QDockWidget
+    # container that DockWindowManager wrapped around the C++ host, and show
+    # / raise it. (DockWindowManager isn't exposed to Python, so we cannot
+    # call its activate() directly.)
+    widget = panel
+    while widget is not None and not isinstance(widget, QtWidgets.QDockWidget):
+        widget = widget.parentWidget()
+    if widget is not None:
+        if widget.isHidden():
+            widget.show()
+        widget.raise_()

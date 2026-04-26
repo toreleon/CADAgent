@@ -53,8 +53,6 @@ from ..permissions import Decision
 translate = App.Qt.translate
 
 
-DOCK_OBJECT_NAME = "CADAgentChatDock"
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _QML_MAIN = os.path.join(_HERE, "qml", "ChatPanel.qml")
 
@@ -1378,97 +1376,74 @@ class QmlChatPanel(QtWidgets.QWidget):
         self.bridge.register_ask(ask_id, cf_future, list(questions or []))
 
 
-PANEL_WIDTH = 460
+CADAGENT_HOST_OBJECT_NAME = "CAD Agent"
 
 
-def _claim_right_corners(mw) -> None:
-    """Give the right dock area both right corners so it spans full height.
+def _find_host_widget():
+    """Locate the C++ ``Gui::CADAgentView`` host registered by MainWindow.
 
-    By default the top/bottom dock areas claim the corners, which squeezes the
-    right dock between them. Reassigning both right corners to the right dock
-    area makes the CAD Agent panel run from just below the menu/toolbar to
-    the status bar — full editor height.
-    """
-    try:
-        mw.setCorner(QtCore.Qt.TopRightCorner, QtCore.Qt.RightDockWidgetArea)
-        mw.setCorner(QtCore.Qt.BottomRightCorner, QtCore.Qt.RightDockWidgetArea)
-    except Exception:
-        pass
-
-
-def _enforce_right_dock(mw, dock) -> None:
-    """Pin the chat dock to the right dock area, never floating.
-
-    ``QMainWindow.restoreState`` can re-place docks on startup based on saved
-    layout. We force right-area placement now and again after the event queue
-    drains so it survives late restores.
-    """
-    dock.setAllowedAreas(
-        QtCore.Qt.LeftDockWidgetArea | QtCore.Qt.RightDockWidgetArea
-    )
-    # No Floatable and no Movable — the dock cannot be dragged into its own
-    # top-level window. Closable only, so users can still hide it.
-    dock.setFeatures(QtWidgets.QDockWidget.DockWidgetClosable)
-    if dock.isFloating():
-        dock.setFloating(False)
-    if mw.dockWidgetArea(dock) != QtCore.Qt.RightDockWidgetArea:
-        mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
-
-    def _reassert():
-        if dock.isFloating():
-            dock.setFloating(False)
-        if mw.dockWidgetArea(dock) != QtCore.Qt.RightDockWidgetArea:
-            mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
-        _claim_right_corners(mw)
-
-    QtCore.QTimer.singleShot(0, _reassert)
-    QtCore.QTimer.singleShot(250, _reassert)
-
-
-def get_or_create_dock() -> QtWidgets.QDockWidget:
-    """Return the chat dock widget, creating it on first call.
-
-    The dock lives in ``RightDockWidgetArea`` and claims both right corners of
-    the main window so the chat column runs full editor height (menu/toolbar
-    down to the status bar), IDE side-panel style.
+    The host is created in ``MainWindow::setupCADAgentView`` and wrapped by a
+    ``QDockWidget`` whose ``objectName`` is also ``"CAD Agent"`` (set by
+    ``DockWindowManager::addDockWindow``). We find the QDockWidget first and
+    return its ``widget()`` — the inner CADAgentView.
     """
     mw = Gui.getMainWindow()
-    existing = mw.findChild(QtWidgets.QDockWidget, DOCK_OBJECT_NAME)
-    if existing is not None:
-        _claim_right_corners(mw)
-        _enforce_right_dock(mw, existing)
-        return existing
+    if mw is None:
+        return None
+    for dw in mw.findChildren(QtWidgets.QDockWidget):
+        if dw.objectName() == CADAGENT_HOST_OBJECT_NAME:
+            inner = dw.widget()
+            if inner is not None:
+                return inner
+    # Last-ditch: any widget with the host objectName that isn't a QDockWidget.
+    for w in mw.findChildren(QtWidgets.QWidget, CADAGENT_HOST_OBJECT_NAME):
+        if not isinstance(w, QtWidgets.QDockWidget):
+            return w
+    return None
 
-    # Older sessions persisted the host as a QToolBar — remove it so the
-    # QDockWidget can take its place.
-    legacy_tb = mw.findChild(QtWidgets.QToolBar, DOCK_OBJECT_NAME)
-    if legacy_tb is not None:
-        mw.removeToolBar(legacy_tb)
-        legacy_tb.deleteLater()
 
-    _claim_right_corners(mw)
+def attach_panel_to_host():
+    """Construct the QML chat panel and inject it into the C++ host shell.
 
-    dock = QtWidgets.QDockWidget(translate("CADAgent", "CAD Agent"), mw)
-    dock.setObjectName(DOCK_OBJECT_NAME)
-    # Hide the default title bar — the QML panel owns its own header chrome,
-    # and removing it lets the content start flush with the top of the right
-    # dock area (aligned with the bottom edge of the top toolbar row), giving
-    # the panel maximum vertical extent without a floating-window look.
-    dock.setTitleBarWidget(QtWidgets.QWidget(dock))
+    Idempotent: if a panel is already attached, returns it unchanged.
+    Returns the panel or ``None`` if the host is unavailable (e.g. running
+    against a FreeCAD build that doesn't ship the CADAgentView shim).
+    """
+    if QmlChatPanel._instance is not None:
+        return QmlChatPanel._instance
 
-    panel = QmlChatPanel(dock)
+    host = _find_host_widget()
+    if host is None:
+        App.Console.PrintError(
+            "CAD Agent: host dock 'CAD Agent' not found. "
+            "Rebuild FreeCAD against the current source so MainWindow "
+            "registers Std_CADAgentView.\n"
+        )
+        return None
+
+    panel = QmlChatPanel(host)
     panel.setMinimumWidth(360)
     QmlChatPanel._instance = panel
-    dock.setWidget(panel)
 
-    mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
-    dock.setFloating(False)
-    try:
-        mw.resizeDocks([dock], [PANEL_WIDTH], QtCore.Qt.Horizontal)
-    except Exception:
-        dock.resize(PANEL_WIDTH, dock.height())
-    _enforce_right_dock(mw, dock)
-    return dock
+    # Q_INVOKABLE setContentWidget reparents and replaces the placeholder.
+    set_content = getattr(host, "setContentWidget", None)
+    if callable(set_content):
+        set_content(panel)
+    else:
+        # Fallback: drop into the host's layout directly.
+        layout = host.layout()
+        if layout is not None:
+            # Remove any placeholder children first.
+            while layout.count():
+                item = layout.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
+            panel.setParent(host)
+            layout.addWidget(panel)
+        else:
+            panel.setParent(host)
+    return panel
 
 
 def get_panel():

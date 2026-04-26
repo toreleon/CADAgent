@@ -89,6 +89,7 @@
 #include "Action.h"
 #include "Assistant.h"
 #include "BitmapFactory.h"
+#include "CADAgentView.h"
 #include "ComboView.h"
 #include "Command.h"
 #include "DockWindowManager.h"
@@ -595,6 +596,7 @@ void MainWindow::setupDockWindows()
     setupPythonConsole();
     setupSelectionView();
     setupTaskView();
+    setupCADAgentView();
 
     initDockWindows(false);
 
@@ -680,6 +682,25 @@ bool MainWindow::setupPythonConsole()
 
         DockWindowManager* pDockMgr = DockWindowManager::instance();
         pDockMgr->registerDockWindow("Std_PythonView", pcPython);
+        return true;
+    }
+
+    return false;
+}
+
+bool MainWindow::setupCADAgentView()
+{
+    // CAD Agent chat dock — host shell registered with DockWindowManager so it
+    // behaves like Std_ReportView / Std_PythonView. The QML chat panel is
+    // injected by the CADAgent Mod via CADAgentView::setContentWidget().
+    if (d->hiddenDockWindows.find("Std_CADAgentView") == std::string::npos) {
+        auto view = new CADAgentView(this);
+        view->setObjectName(QStringLiteral("CAD Agent"));
+        view->setWindowTitle(QDockWidget::tr("CAD Agent"));
+        view->setMinimumWidth(360);
+
+        DockWindowManager* pDockMgr = DockWindowManager::instance();
+        pDockMgr->registerDockWindow("Std_CADAgentView", view);
         return true;
     }
 
