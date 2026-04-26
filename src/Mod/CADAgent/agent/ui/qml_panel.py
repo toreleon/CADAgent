@@ -643,6 +643,7 @@ class QmlChatBridge(QtCore.QObject):
     scrollToEnd = QtCore.Signal()
     attachmentsChanged = QtCore.Signal()
     todosChanged = QtCore.Signal()
+    activeDocChanged = QtCore.Signal(str)
 
     def __init__(self, model: MessagesModel, parent=None):
         super().__init__(parent)
@@ -1082,6 +1083,31 @@ class QmlChatBridge(QtCore.QObject):
                 translate("CADAgent", "CAD Agent ready. Ask me to model something.")
             )
 
+    @QtCore.Slot(result=str)
+    def openDocsList(self) -> str:
+        """Return the list of open FreeCAD docs as JSON for the workspace chip.
+
+        Each entry: ``{"name","label","path","active"}``.
+        """
+        if self._runtime is None:
+            return "[]"
+        try:
+            return json.dumps(self._runtime.list_open_docs())
+        except Exception:
+            return "[]"
+
+    @QtCore.Slot(str, result=bool)
+    def setActiveDocument(self, label_or_name: str) -> bool:
+        """Switch FreeCAD's active document. Routes through the runtime so
+        the workspace path tracker fires ``activeDocChanged``.
+        """
+        if self._runtime is None:
+            return False
+        try:
+            return bool(self._runtime.set_active_document(label_or_name))
+        except Exception:
+            return False
+
     @QtCore.Slot()
     def configureLlm(self) -> None:
         try:
@@ -1336,6 +1362,12 @@ class QmlChatPanel(QtWidgets.QWidget):
             self.bridge.set_permission_mode(mode, persist=False)
         except Exception:
             pass
+        proxy = getattr(runtime, "_proxy", None)
+        if proxy is not None and hasattr(proxy, "activeDocChanged"):
+            try:
+                proxy.activeDocChanged.connect(self.bridge.activeDocChanged)
+            except Exception:
+                pass
 
     def append_assistant_text(self, text: str) -> None:
         self.model.append_assistant(text)

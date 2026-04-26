@@ -83,6 +83,8 @@ Rectangle {
             Layout.topMargin: 4
             bridge: root.chatBridge
             theme: root
+            panelItem: root
+            panelWidth: root.width
             onOpenHistory: {
                 historyPopup.refresh()
                 historyPopup.open()
