@@ -6,10 +6,10 @@ The claude_agent_sdk persists full transcripts itself (under
 and ``get_session_messages()``. We only need to remember *which* SDK session
 IDs belong to which FreeCAD document, plus lightweight display metadata.
 
-Schema (v2)::
+Schema (v3)::
 
     {
-        "schema_version": 2,
+        "schema_version": 3,
         "sessions": [
             {
                 "id": "<uuid>",
@@ -18,17 +18,23 @@ Schema (v2)::
                 "created_at": "2026-04-21T19:50:10",
                 "updated_at": "2026-04-21T19:55:02",
                 "turn_count": 3,
-                "parent_id": null,         # v2: source sid if branched
+                "parent_id": null,         # v2: source sid if rewind-forked
                 "branch_from_turn": null,  # v2: turn index this branch forked at
-                "archived": false          # v2: hide from default listings
+                "archived": false,         # v2: hide from default listings
+                "compacted": false,        # v3: was this session created by a compact?
+                "compacted_from": null,    # v3: parent sid before compaction
+                "tokens": {                # v3: cumulative token usage
+                    "input_total": 0,
+                    "output_total": 0,
+                    "last_seen": null
+                }
             },
             ...
         ]
     }
 
-v1 entries (lacking ``parent_id`` / ``branch_from_turn`` / ``archived``) are
-auto-migrated on load with default values, and the index is re-saved on the
-next mutating call.
+v1 / v2 entries are auto-migrated on load with default values, and the index
+is re-saved on the next mutating call.
 """
 
 from __future__ import annotations
@@ -41,14 +47,22 @@ import tempfile
 import FreeCAD as App
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 MAX_TITLE_LEN = 80
 
-# v2 fields injected into legacy session entries on load.
-_V2_DEFAULTS = {
+
+def _default_tokens() -> dict:
+    return {"input_total": 0, "output_total": 0, "last_seen": None}
+
+
+# Scalar fields injected into legacy session entries on load (v1/v2 -> v3).
+# ``tokens`` is handled separately so each entry gets its own fresh dict.
+_VLATEST_DEFAULTS = {
     "parent_id": None,
     "branch_from_turn": None,
     "archived": False,
+    "compacted": False,
+    "compacted_from": None,
 }
 
 
@@ -133,9 +147,14 @@ def _migrate_in_memory(data: dict) -> dict:
     for entry in sessions:
         if not isinstance(entry, dict):
             continue
-        for key, default in _V2_DEFAULTS.items():
-            if key not in entry:
-                entry[key] = default
+        for key, default in _VLATEST_DEFAULTS.items():
+            entry.setdefault(key, default)
+        # tokens needs a fresh per-entry dict; also heal partial dicts.
+        if not isinstance(entry.get("tokens"), dict):
+            entry["tokens"] = _default_tokens()
+        else:
+            for tk, tv in _default_tokens().items():
+                entry["tokens"].setdefault(tk, tv)
     data["sessions"] = sessions
     return data
 
@@ -226,7 +245,12 @@ def record_turn(doc, session_id: str, first_prompt: str | None) -> dict:
         "created_at": now,
         "updated_at": now,
         "turn_count": 1,
-        **_V2_DEFAULTS,
+        "parent_id": None,
+        "branch_from_turn": None,
+        "archived": False,
+        "compacted": False,
+        "compacted_from": None,
+        "tokens": _default_tokens(),
     }
     sessions.append(entry)
     data["sessions"] = sessions
@@ -387,6 +411,9 @@ def clone_metadata(
         "parent_id": src_sid,
         "branch_from_turn": int(branch_from_turn or 0),
         "archived": False,
+        "compacted": False,
+        "compacted_from": None,
+        "tokens": _default_tokens(),
     }
     # Idempotent: drop any pre-existing entry with the same id.
     sessions = [
@@ -397,6 +424,91 @@ def clone_metadata(
     data["sessions"] = sessions
     _save(doc, data)
     return new_entry
+
+
+def mark_compacted(doc, new_sid: str, parent_sid: str) -> None:
+    """Flag ``new_sid`` as the compaction product of ``parent_sid``.
+
+    If ``new_sid`` is already in the index, it is updated in place. Otherwise
+    a stub entry is created mirroring the parent's ``title`` / ``first_prompt``
+    so the history UI can render it before the first turn lands. Idempotent:
+    re-calling with the same args is a no-op modulo ``updated_at``.
+    """
+    data = load(doc)
+    sessions = data.get("sessions") or []
+    now = _now_iso()
+    for entry in sessions:
+        if isinstance(entry, dict) and entry.get("id") == new_sid:
+            entry["compacted"] = True
+            entry["compacted_from"] = parent_sid
+            entry["updated_at"] = now
+            data["sessions"] = sessions
+            _save(doc, data)
+            return
+
+    parent = None
+    for entry in sessions:
+        if isinstance(entry, dict) and entry.get("id") == parent_sid:
+            parent = entry
+            break
+
+    stub = {
+        "id": new_sid,
+        "title": (parent.get("title") if parent else None) or "Untitled chat",
+        "first_prompt": (parent.get("first_prompt") if parent else "") or "",
+        "created_at": now,
+        "updated_at": now,
+        "turn_count": 0,
+        "parent_id": None,
+        "branch_from_turn": None,
+        "archived": False,
+        "compacted": True,
+        "compacted_from": parent_sid,
+        "tokens": _default_tokens(),
+    }
+    sessions.append(stub)
+    data["sessions"] = sessions
+    _save(doc, data)
+
+
+def update_tokens(doc, sid: str, usage: dict | None) -> None:
+    """Accumulate ``usage`` into ``sid``'s token totals.
+
+    Tolerates ``usage`` being ``None`` or empty (no-op). Missing
+    ``input_tokens`` / ``output_tokens`` keys are treated as 0.
+    """
+    if not usage:
+        return
+    in_delta = int(usage.get("input_tokens") or 0)
+    out_delta = int(usage.get("output_tokens") or 0)
+    if in_delta == 0 and out_delta == 0:
+        return
+    data = load(doc)
+    sessions = data.get("sessions") or []
+    for entry in sessions:
+        if isinstance(entry, dict) and entry.get("id") == sid:
+            tokens = entry.get("tokens")
+            if not isinstance(tokens, dict):
+                tokens = _default_tokens()
+            tokens["input_total"] = int(tokens.get("input_total") or 0) + in_delta
+            tokens["output_total"] = int(tokens.get("output_total") or 0) + out_delta
+            tokens["last_seen"] = _now_iso()
+            entry["tokens"] = tokens
+            data["sessions"] = sessions
+            _save(doc, data)
+            return
+
+
+def get_tokens(doc, sid: str) -> dict:
+    """Return cumulative token usage for ``sid``, or zero-defaults if missing."""
+    out = _default_tokens()
+    entry = find(doc, sid)
+    tokens = entry.get("tokens") if entry else None
+    if isinstance(tokens, dict):
+        for k in out:
+            if tokens.get(k) is not None:
+                out[k] = tokens[k]
+    return out
 
 
 def delete(doc, session_id: str) -> bool:
