@@ -83,6 +83,33 @@ def test_settings_cache_invalidated_on_mtime(tmp_path, monkeypatch):
     assert merged["hooks"]["Stop"]
 
 
+# --- settings_source -----------------------------------------------------
+
+
+def test_settings_source_none(tmp_path):
+    source, settings = hooks.settings_source(str(tmp_path / "doc"))
+    assert source == "none"
+    assert settings == {}
+
+
+def test_settings_source_user(tmp_path, monkeypatch):
+    user = tmp_path / "user_settings.json"
+    monkeypatch.setattr(hooks, "_USER_SETTINGS_PATH", user)
+    _write(user, {"hooks": {"Stop": []}})
+    source, _ = hooks.settings_source(None)
+    assert source == "user"
+
+
+def test_settings_source_project_wins(tmp_path, monkeypatch):
+    user = tmp_path / "user_settings.json"
+    monkeypatch.setattr(hooks, "_USER_SETTINGS_PATH", user)
+    _write(user, {"hooks": {"Stop": []}})
+    proj_dir = tmp_path / "doc"
+    _write(proj_dir / ".cadagent" / "settings.json", {"hooks": {}})
+    source, _ = hooks.settings_source(str(proj_dir))
+    assert source == "project"
+
+
 # --- executor: result paths ---------------------------------------------
 
 

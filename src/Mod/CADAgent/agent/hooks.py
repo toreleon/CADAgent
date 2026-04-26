@@ -125,6 +125,24 @@ def _clear_cache() -> None:
     _settings_cache.clear()
 
 
+def settings_source(doc_dir: str | None = None) -> tuple[str, dict]:
+    """Return ``(source, merged_settings)`` for the topbar indicator.
+
+    ``source`` is one of ``"project"``, ``"user"``, or ``"none"``. Project
+    wins when its settings.json exists (mirrors the override semantics in
+    :func:`load_settings`); user wins when only the user file exists; and
+    ``"none"`` means neither file is present even if ``load_settings``
+    returned a cached empty dict.
+    """
+    proj_path = _project_path(doc_dir)
+    settings = load_settings(doc_dir)
+    if proj_path is not None and proj_path.exists():
+        return "project", settings
+    if _USER_SETTINGS_PATH.exists():
+        return "user", settings
+    return "none", settings
+
+
 # --- execution -----------------------------------------------------------
 
 
@@ -247,4 +265,4 @@ def run(
 
 
 # Public re-exports for tests / external consumers.
-__all__ = ["HookResult", "run", "load_settings"]
+__all__ = ["HookResult", "run", "load_settings", "settings_source"]
