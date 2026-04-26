@@ -49,7 +49,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from .. import gui_thread, ui_bridge
+from .. import gui_thread, hooks, ui_bridge
 from ..permissions import make_can_use_tool, clear_session_allowlist
 from ..worker import client as worker_client
 from . import dock_tools, runtime as cli_runtime
@@ -160,6 +160,9 @@ class _PanelProxy(QtCore.QObject):
     planExited = QtCore.Signal()
     # Edit-approval scaffolding (M3).
     editApprovalRequest = QtCore.Signal(str, str, str, object)  # (reqId, summary, script, cf_future)
+    # Hook lifecycle event — (event_name, payload_dict, result_dict). Consumed
+    # by W2-E to render hook activity rows; safe to leave unconnected.
+    hookEvent = QtCore.Signal(str, object, object)
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -316,11 +319,53 @@ class DockRuntime:
         # checkpoint store and tagged onto persisted user rows so rewind
         # (W1-B) can map a row back to its workspace snapshot.
         self._turn_index: int = 0
+        # tool_use_id -> (tool_name, tool_input) so PostToolUse hooks can see
+        # the original invocation alongside the SDK's tool_result content.
+        self._pending_tool_calls: dict[str, tuple[str, Any]] = {}
 
     @property
     def last_turn_index(self) -> int:
         """Index of the most recently submitted turn (0-based)."""
         return self._turn_index
+
+    # --- hooks ---------------------------------------------------------
+
+    def _doc_dir(self) -> str | None:
+        """Return the directory of the active workspace doc, if any.
+
+        Used by the hooks engine to resolve project-scoped settings at
+        ``<doc_dir>/.cadagent/settings.json``.
+        """
+        if not self._workspace_path:
+            return None
+        try:
+            return os.path.dirname(self._workspace_path) or None
+        except (TypeError, ValueError):
+            return None
+
+    def _run_hook(self, event_name: str, payload: dict) -> "hooks.HookResult | None":
+        """Dispatch ``event_name`` and surface the result on ``hookEvent``.
+
+        Wrapped in try/except: a misconfigured settings.json must never crash
+        a turn. Returns the result so callers can react to ``decision == "block"``.
+        """
+        try:
+            result = hooks.run(event_name, payload, doc_dir=self._doc_dir())
+        except Exception:
+            return None
+        try:
+            self._proxy.hookEvent.emit(
+                event_name,
+                payload,
+                {
+                    "decision": result.decision,
+                    "message": result.message,
+                    "output": result.output,
+                },
+            )
+        except Exception:
+            pass
+        return result
 
     # --- worker thread -------------------------------------------------
 
@@ -399,7 +444,9 @@ class DockRuntime:
             extra_tools=dock_tools.TOOL_FUNCS,
             extra_allowed_tool_names=dock_tools.allowed_tool_names("cad"),
             permission_mode=mode,
-            can_use_tool=make_can_use_tool(self._proxy, mode),
+            can_use_tool=make_can_use_tool(
+                self._proxy, mode, doc_dir_provider=self._doc_dir,
+            ),
             **extra_opts,
         )
         self.client = ClaudeSDKClient(options=options)
@@ -428,10 +475,18 @@ class DockRuntime:
                 gui_thread.run_sync(_reload_active_doc_if_stale, timeout=30.0)
             except Exception:
                 pass
+            # Stop hook — fires once per turn boundary regardless of error
+            # status. Any returned decision is informational; we don't block
+            # turn-end teardown on it.
+            try:
+                self._run_hook("Stop", {})
+            except Exception:
+                pass
             # Drop per-turn bookkeeping so stale ids don't leak across turns
             # or across resumes.
             self._suppressed_tool_ids.clear()
             self._plan_tool_ids.clear()
+            self._pending_tool_calls.clear()
             self._proxy.turnComplete.emit()
 
     def _route_message(self, msg) -> None:
@@ -481,6 +536,11 @@ class DockRuntime:
         short = _strip_prefix(block.name)
         tool_input = block.input or {}
 
+        # Stash so the matching tool_result can fire PostToolUse with both
+        # input and output. PreToolUse already ran inside permissions.py.
+        if tool_id:
+            self._pending_tool_calls[tool_id] = (short, tool_input)
+
         if short == "TodoWrite":
             todos = tool_input.get("todos") if isinstance(tool_input, dict) else None
             self._proxy.todosUpdate.emit(list(todos or []))
@@ -515,6 +575,20 @@ class DockRuntime:
 
     def _handle_tool_result(self, block: ToolResultBlock) -> None:
         tool_id = getattr(block, "tool_use_id", "") or ""
+        # PostToolUse — fire once per tool round-trip, before the panel-
+        # routing branches. Decisions are informational at this stage; the
+        # tool already ran. We swallow exceptions (handled in _run_hook).
+        call = self._pending_tool_calls.pop(tool_id, None)
+        if call is not None:
+            tool_name, tool_input = call
+            self._run_hook(
+                "PostToolUse",
+                {
+                    "tool_name": tool_name,
+                    "input": tool_input,
+                    "output": block.content,
+                },
+            )
         plan_name = self._plan_tool_ids.pop(tool_id, None)
         if plan_name == "plan_emit":
             self._emit_plan_milestones(block)
@@ -627,6 +701,15 @@ class DockRuntime:
             self.panel.show_error(f"Could not inspect active document: {exc}")
             return
         self._workspace_path = snap.get("path")
+        # UserPromptSubmit hook — a configured command can veto the turn
+        # before any LLM round-trip. We surface the message via show_error
+        # so the user sees why the prompt was dropped.
+        ups = self._run_hook("UserPromptSubmit", {"prompt": user_text})
+        if ups is not None and ups.decision == "block":
+            self.panel.show_error(
+                ups.message or "Prompt blocked by UserPromptSubmit hook"
+            )
+            return
         # Allocate this turn's index *before* dispatching, so the checkpoint
         # filename and the user-row meta agree even if SDK output races
         # ahead of the panel.
@@ -763,6 +846,79 @@ class DockRuntime:
         if self.client is not None and self._loop is not None:
             asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
         return True
+
+    async def rewind_to(
+        self,
+        row_id: str,
+        fork: bool,
+        new_user_text: str | None = None,
+    ) -> str:
+        """Rewind the conversation to ``row_id``.
+
+        Closes the live SDK client, truncates the persisted CADAgent rows
+        and the SDK transcript JSONL, optionally restores the workspace
+        ``.FCStd`` snapshot for the matching turn, and arms the next turn to
+        resume the (possibly forked) session.
+
+        Returns the (possibly new) sid. ``new_user_text`` is currently
+        unused by this method — the panel layer issues the new prompt after
+        rewind completes; the parameter is reserved for future callers.
+
+        Defensive: if any step fails (no rows persisted yet, missing SDK
+        JSONL, no checkpoints module) we fall through and return the best
+        sid we have.
+        """
+        del new_user_text  # currently unused; see docstring.
+
+        # 1. Tear down the live client so the next turn rebuilds with a
+        #    fresh resume target.
+        await self._aclose()
+
+        panel = self.panel
+        doc = (
+            getattr(panel, "_bound_doc", None)
+            or getattr(App, "ActiveDocument", None)
+        )
+        sid = getattr(panel, "_current_session_id", None) or self._resume_sid
+        if not sid or doc is None:
+            return sid or ""
+
+        # 2. Resolve row index (and turn_index for checkpoint restore) from
+        #    the panel's model.
+        row_index = -1
+        turn_index: int | None = None
+        try:
+            model = panel.model  # type: ignore[attr-defined]
+            row_by_id = getattr(model, "_row_by_id", {}) or {}
+            row_index = int(row_by_id.get(row_id, -1))
+            if 0 <= row_index < len(model._rows):
+                meta = (model._rows[row_index] or {}).get("meta") or {}
+                ti = meta.get("turn_index")
+                if isinstance(ti, int):
+                    turn_index = ti
+        except Exception:
+            row_index = -1
+
+        # 3. Truncate transcript + SDK store.
+        try:
+            from .. import rewind as _rewind  # local import: avoids cycles
+            new_sid = _rewind.truncate_session(doc, sid, row_index, fork)
+        except Exception:
+            new_sid = sid
+
+        # 4. Best-effort workspace restore (W1-A's checkpoints module).
+        if turn_index is not None:
+            try:
+                from .. import checkpoints as _checkpoints  # type: ignore
+                doc_path = getattr(doc, "FileName", "") or ""
+                if doc_path:
+                    _checkpoints.restore(new_sid, turn_index, doc_path)
+            except (ImportError, Exception):
+                pass
+
+        # 5. Arm the next turn to resume the (possibly new) sid.
+        self._resume_sid = new_sid
+        return new_sid
 
     async def _aclose(self) -> None:
         if self.client is not None:

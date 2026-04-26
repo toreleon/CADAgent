@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
-from . import ui_bridge
+from . import hooks, ui_bridge
 
 
 # Tools whose invocation should be surfaced as a stageable "edit" rather than
@@ -159,7 +159,7 @@ def session_allowlist() -> set[str]:
     return set(_SESSION_ALLOWLIST)
 
 
-def make_can_use_tool(proxy, permission_mode: str = "default"):
+def make_can_use_tool(proxy, permission_mode: str = "default", doc_dir_provider=None):
     """Return a `can_use_tool` coroutine that asks the GUI thread via `proxy`.
 
     `proxy` is a `_PanelProxy` QObject whose `permissionRequest` signal is
@@ -182,6 +182,29 @@ def make_can_use_tool(proxy, permission_mode: str = "default"):
     plan_only = permission_mode == "plan"
 
     async def can_use_tool(tool_name, tool_input, context=None):
+        # PreToolUse hook runs first — a user-configured command can block
+        # any tool (including read-only) before mode logic kicks in. Hook
+        # failures are swallowed so settings.json typos can't crash the
+        # agent loop.
+        try:
+            doc_dir = None
+            if doc_dir_provider is not None:
+                try:
+                    doc_dir = doc_dir_provider()
+                except Exception:
+                    doc_dir = None
+            hook_result = hooks.run(
+                "PreToolUse",
+                {"tool_name": tool_name, "input": tool_input},
+                doc_dir=doc_dir,
+            )
+        except Exception:
+            hook_result = None
+        if hook_result is not None and hook_result.decision == "block":
+            return PermissionResultDeny(
+                message=hook_result.message or "Blocked by PreToolUse hook"
+            )
+
         # AskUserQuestion is a built-in SDK tool. Per the Agent SDK docs, the
         # client handles it in can_use_tool and returns the user's answers as
         # `updated_input`; the SDK then feeds those back to the model as the
