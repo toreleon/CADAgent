@@ -33,7 +33,7 @@ def test_v1_index_is_migrated_on_load(fake_doc):
 
     data = sessions.load(fake_doc)
 
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
     entry = data["sessions"][0]
     assert entry["parent_id"] is None
     assert entry["branch_from_turn"] is None
@@ -51,7 +51,7 @@ def test_v1_index_with_no_schema_version_migrates(fake_doc):
         {"sessions": [{"id": "s1", "title": "x", "turn_count": 1}]},
     )
     data = sessions.load(fake_doc)
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
     assert data["sessions"][0]["archived"] is False
     assert data["sessions"][0]["parent_id"] is None
 
@@ -80,7 +80,7 @@ def test_migration_persists_after_next_save(fake_doc):
 
     with open(path, "r", encoding="utf-8") as f:
         on_disk = json.load(f)
-    assert on_disk["schema_version"] == 2
+    assert on_disk["schema_version"] == 3
     assert on_disk["sessions"][0]["archived"] is False
     assert on_disk["sessions"][0]["parent_id"] is None
     assert on_disk["sessions"][0]["title"] == "renamed"

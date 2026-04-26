@@ -12,6 +12,7 @@ SET(CADAgent_TOP
 SET(CADAgent_AGENT
     agent/__init__.py
     agent/checkpoints.py
+    agent/compaction.py
     agent/gui_thread.py
     agent/hooks.py
     agent/memory.py
