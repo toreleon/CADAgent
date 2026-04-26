@@ -278,6 +278,74 @@ def unarchive(doc, session_id: str) -> bool:
     return _set_archived(doc, session_id, False)
 
 
+def truncate_rows(doc, session_id: str, keep_through_index: int) -> list:
+    """Truncate persisted rows for ``session_id`` to ``rows[: keep_through_index + 1]``.
+
+    Returns the truncated row list. Negative ``keep_through_index`` clears
+    the transcript. Returns ``[]`` if no rows have been persisted yet.
+    """
+    rows = load_rows(doc, session_id)
+    if not rows:
+        return []
+    if keep_through_index < 0:
+        truncated: list = []
+    else:
+        truncated = list(rows[: keep_through_index + 1])
+    save_rows(doc, session_id, truncated)
+    return truncated
+
+
+def clone_metadata(
+    doc,
+    src_sid: str,
+    new_sid: str,
+    branch_from_turn: int,
+) -> dict | None:
+    """Clone ``src_sid``'s session-index entry into a new ``new_sid`` branch.
+
+    The new entry inherits the source's ``title`` / ``first_prompt`` and
+    records ``parent_id=src_sid`` + ``branch_from_turn``. Returns the new
+    entry, or ``None`` if the source sid is not in the index.
+
+    Coordinates with the upcoming v2 schema (W1-D): ``parent_id``,
+    ``branch_from_turn``, and ``archived`` are written via direct dict
+    assignment so the entry is well-formed whether or not v2 has shipped
+    yet. Reading v2-only fields elsewhere should use ``.get()``.
+    """
+    data = load(doc)
+    sessions = data.get("sessions") or []
+    src = None
+    for entry in sessions:
+        if isinstance(entry, dict) and entry.get("id") == src_sid:
+            src = entry
+            break
+    if src is None:
+        return None
+
+    now = _now_iso()
+    base_title = src.get("title") or "Untitled chat"
+    new_entry = {
+        "id": new_sid,
+        "title": f"{base_title} (fork)",
+        "first_prompt": src.get("first_prompt") or "",
+        "created_at": now,
+        "updated_at": now,
+        "turn_count": int(branch_from_turn or 0),
+        "parent_id": src_sid,
+        "branch_from_turn": int(branch_from_turn or 0),
+        "archived": False,
+    }
+    # Idempotent: drop any pre-existing entry with the same id.
+    sessions = [
+        e for e in sessions
+        if not (isinstance(e, dict) and e.get("id") == new_sid)
+    ]
+    sessions.append(new_entry)
+    data["sessions"] = sessions
+    _save(doc, data)
+    return new_entry
+
+
 def delete(doc, session_id: str) -> bool:
     data = load(doc)
     sessions = data.get("sessions") or []
