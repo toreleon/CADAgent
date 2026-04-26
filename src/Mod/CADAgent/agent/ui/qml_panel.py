@@ -623,6 +623,7 @@ class QmlChatBridge(QtCore.QObject):
     milestoneSummaryChanged = QtCore.Signal()
     scrollToEnd = QtCore.Signal()
     attachmentsChanged = QtCore.Signal()
+    todosChanged = QtCore.Signal()
 
     def __init__(self, model: MessagesModel, parent=None):
         super().__init__(parent)
@@ -638,6 +639,7 @@ class QmlChatBridge(QtCore.QObject):
         self._pending_ask: dict[str, Any] = {}  # concurrent.futures.Future
         self._pending_edit: dict[str, Any] = {}  # concurrent.futures.Future
         self._attachments: list[dict[str, str]] = []  # [{"path","name"}, ...]
+        self._todos: list[dict] = []
 
     def bind(self, panel: "QmlChatPanel", runtime) -> None:
         self._panel = panel
@@ -716,6 +718,17 @@ class QmlChatBridge(QtCore.QObject):
             return
         self._milestone_summary = text
         self.milestoneSummaryChanged.emit()
+
+    @QtCore.Property('QVariant', notify=todosChanged)
+    def currentTodos(self):
+        return list(self._todos)
+
+    def set_todos(self, todos: list) -> None:
+        new = list(todos or [])
+        if new == self._todos:
+            return
+        self._todos = new
+        self.todosChanged.emit()
 
     # --- Slots (QML → Python) ----------------------------------------
 
@@ -939,6 +952,7 @@ class QmlChatBridge(QtCore.QObject):
             self._panel._first_prompt = None
             self._panel._current_session_id = None
         self._model.clear()
+        self.set_todos([])
         self._model.add_system(
             translate("CADAgent", "CAD Agent ready. Ask me to model something.")
         )
@@ -1173,6 +1187,7 @@ class QmlChatPanel(QtWidgets.QWidget):
         if not isinstance(todos, list):
             return
         self.model.upsert_todos(todos)
+        self.bridge.set_todos(todos)
         self.bridge.scrollToEnd.emit()
 
     def announce_tool_result(self, tool_use_id: str, content, is_error: bool) -> None:
