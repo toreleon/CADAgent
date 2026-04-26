@@ -1,113 +1,159 @@
-<a href="https://freecad.org"><img src="/src/Gui/Icons/freecad.svg" height="100px" width="100px"></a>
+<a href="#"><img src="/src/Gui/Icons/freecad.svg" height="100px" width="100px"></a>
 
-### Your own 3D Parametric Modeler
+# CADAgent
 
-[Website](https://www.freecad.org) •
-[Documentation](https://wiki.freecad.org) •
-[Forum](https://forum.freecad.org/) •
-[Bug tracker](https://github.com/FreeCAD/FreeCAD/issues) •
-[Git repository](https://github.com/FreeCAD/FreeCAD) •
-[Blog](https://blog.freecad.org)
+### AI-powered 3D parametric modeling — your CAD copilot, built on FreeCAD
 
+CADAgent is a project forked from [FreeCAD](https://www.freecad.org). It keeps everything you love about FreeCAD and adds an AI assistant directly inside the app: a chat panel that opens automatically at launch (think GitHub Copilot, but for CAD) and a command‑line agent that can drive FreeCAD on your behalf.
 
-[![Release](https://img.shields.io/github/release/freecad/freecad.svg)](https://github.com/freecad/freecad/releases/latest) [![Crowdin](https://d322cqt584bo4o.cloudfront.net/freecad/localized.svg)](https://crowdin.com/project/freecad)
-
-<img src="/.github/images/partdesign.png" width="800"/>
-
-Overview
---------
-
-* **Freedom to build what you want**  FreeCAD is an open-source parametric 3D 
-modeler made primarily to design real-life objects of any size. 
-Parametric modeling allows you to easily modify your design by going back into 
-your model history to change its parameters. 
-
-* **Create 3D from 2D and back** FreeCAD lets you sketch geometry-constrained
- 2D shapes and use them as a base to build other objects.
- It contains many components to adjust dimensions or extract design details from 
- 3D models to create high quality production-ready drawings.
-
-* **Designed for your needs** FreeCAD is designed to fit a wide range of uses
-including product design, mechanical engineering and architecture,
-whether you are a hobbyist, programmer, experienced CAD user, student or teacher.
-
-* **Cross platform** FreeCAD runs on Windows, macOS and Linux operating systems.
-
-* **Underlying technology**
-    * **OpenCASCADE** A powerful geometry kernel, the most important component of FreeCAD
-    * **Coin3D library** Open Inventor-compliant 3D scene representation model
-    * **Python** FreeCAD offers a broad Python API
-    * **Qt** Graphical user interface built with Qt
-
-
-Installing
-----------
-
-Precompiled packages for stable releases are available for Windows, macOS and Linux on the
-[latest releases page](https://github.com/FreeCAD/FreeCAD/releases/latest).
-
-On most Linux distributions, FreeCAD is also directly installable from the 
-software center application.
-
-For weekly development releases visit the [releases page](https://github.com/FreeCAD/FreeCAD/releases/).
-
-Other options are described on the [wiki Download page](https://wiki.freecad.org/Download).
-
-Compiling
----------
-
-See the [Developers Handbook – Getting Started](https://freecad.github.io/DevelopersHandbook/gettingstarted/)
-for build instructions.
-
-
-Reporting Issues
----------
-
-To report an issue please:
-
-- Consider posting to the [Forum](https://forum.freecad.org), [Discord](https://discord.com/invite/w2cTKGzccC) channel, or [Reddit](https://www.reddit.com/r/FreeCAD) to verify the issue; 
-- Search the existing [issues](https://github.com/FreeCAD/FreeCAD/issues) for potential duplicates; 
-- Use the most updated stable or [development versions](https://github.com/FreeCAD/FreeCAD/releases/) of FreeCAD; 
-- Post version info from `Help > About FreeCAD > Copy to clipboard`; 
-- Restart FreeCAD in safe mode `Help > Restart in safe mode` and try to reproduce the issue again. If the issue is resolved it can be fixed by deleting the FreeCAD config files.
-- Start recording a macro `Macro > Macro recording...` and repeat all steps. Stop recording after the issue occurs and upload the saved macro or copy the macro code in the issue; 
-- Post a Step-By-Step explanation on how to recreate the issue; 
-- Upload an example file (FCStd as ZIP file) to demonstrate the problem; 
-
-For more details see:
-
-- [Bug Tracker](https://github.com/FreeCAD/FreeCAD/issues)
-- [Reporting Issues and Requesting Features](https://github.com/FreeCAD/FreeCAD/issues/new/choose)
-- [Contributing](https://github.com/FreeCAD/FreeCAD/blob/main/CONTRIBUTING.md)
-- [Help Forum](https://forum.freecad.org/viewforum.php?f=3)
-
-> [!NOTE]
-The [FPA](https://fpa.freecad.org) offers developers the opportunity
-to apply for a grant to work on projects of their choosing. Check
-[jobs and funding](https://blog.freecad.org/jobs/) to know more.
-
-
-Usage & Getting Help
---------------------
-
-The FreeCAD wiki contains documentation on 
-general FreeCAD usage, Python scripting, and development.
-View these pages for more information:
-
-- [Getting started](https://wiki.freecad.org/Getting_started)
-- [Features list](https://wiki.freecad.org/Feature_list)
-- [Frequent questions](https://wiki.freecad.org/FAQ/en)
-- [Workbenches](https://wiki.freecad.org/Workbenches)
-- [Scripting](https://wiki.freecad.org/Power_users_hub)
-- [Developers Handbook](https://freecad.github.io/DevelopersHandbook/)
-
-The [FreeCAD forum](https://forum.freecad.org) is a great place
-to find help and solve specific problems when learning to use FreeCAD.
+> **Status:** early development. Things move fast and may break. Feedback and contributions are very welcome.
 
 ---
 
-<p>This project receives generous infrastructure support from
-  <a href="https://www.digitalocean.com/">
-    <img src="https://opensource.nyc3.cdn.digitaloceanspaces.com/attribution/assets/SVG/DO_Logo_horizontal_blue.svg" width="91px">
-  </a> and <a href="https://www.kipro-pcb.com/">KiCad Services Corp.</a>
-</p>
+## For everyone — what is CADAgent?
+
+CADAgent is a 3D modeling app you can talk to.
+
+- **You describe what you want** — *“make a 20×10×5 mm plate with four 3 mm mounting holes”* — and the assistant builds it inside FreeCAD.
+- **The chat panel is always there.** When you start CADAgent, the assistant dock opens automatically next to your model, just like a code editor’s AI sidebar.
+- **You stay in control.** CADAgent uses real FreeCAD operations under the hood, so the model you get is a normal `.FCStd` file. You can edit it by hand, tweak parameters, or hand it off to a colleague who has plain FreeCAD.
+- **It runs on your machine.** Your model files stay local. You bring your own AI provider (an API key or a local proxy) — see *Configuring the AI backend* below.
+
+If you have never used FreeCAD before, CADAgent is a great way to start: ask the assistant for shapes, then learn the underlying tools as you go.
+
+## For developers — what’s inside?
+
+CADAgent is the FreeCAD 1.2.x source tree plus:
+
+- A new workbench/module: [src/Mod/CADAgent/](src/Mod/CADAgent/) — the in‑app chat dock, agent runtime, sessions store, and rewind/compaction logic.
+- A standalone CLI agent: [scripts/cadagent](scripts/cadagent) and [scripts/cadagent-cli](scripts/cadagent-cli) — drives FreeCAD via `FreeCADCmd` subprocesses, no GUI required.
+- A `pixi`-managed build environment ([pixi.toml](pixi.toml)) that pins the toolchain so `configure-debug` / `build-debug` work out of the box.
+- The Anthropic Claude Agent SDK as the default agent backbone, routed through any OpenAI/Anthropic‑compatible endpoint via [LiteLLM](https://github.com/BerriAI/litellm).
+
+Everything else — the geometry kernel (OpenCASCADE), Coin3D viewer, Python API, Qt UI, Sketcher, Part Design, Assembly, TechDraw, FEM, BIM, CAM, etc. — is inherited from upstream FreeCAD and stays fully usable.
+
+---
+
+## Installing
+
+There are no precompiled CADAgent binaries yet. Build from source — see *Building from source* below.
+
+If you only want classic FreeCAD without the agent, grab a release from the [upstream project](https://github.com/FreeCAD/FreeCAD/releases/latest).
+
+## Building from source
+
+CADAgent uses [`pixi`](https://pixi.sh) to provide a hermetic toolchain.
+
+```bash
+# 1. Clone with submodules
+git clone --recursive <this repo's url> CADAgent
+cd CADAgent
+
+# 2. Install the pixi environment (one time)
+pixi install
+
+# 3. Configure and build the debug tree
+pixi run configure-debug
+pixi run build-debug
+```
+
+If `pixi` is not on your `PATH`, call it directly: `~/.pixi/bin/pixi run build-debug`.
+
+A full build can take a while and produces thousands of targets. Warnings in third‑party code are normal.
+
+### Running
+
+```bash
+# GUI app — the CADAgent chat dock opens automatically
+build/debug/bin/FreeCAD
+
+# Headless CLI
+build/debug/bin/FreeCADCmd -c "import FreeCAD; print(FreeCAD.Version())"
+```
+
+In sandboxed environments where `$HOME` is not writable, redirect FreeCAD’s config dir:
+
+```bash
+env HOME=$PWD/.fc-home \
+    XDG_DATA_HOME=$PWD/.fc-home/.local/share \
+    XDG_CONFIG_HOME=$PWD/.fc-home/.config \
+    build/debug/bin/FreeCAD
+```
+
+### Standalone agent CLI
+
+Once the debug tree is built and your AI backend is configured, you can drive FreeCAD from the terminal:
+
+```bash
+scripts/cadagent "create a 20x10x5 mm plate and save it to /tmp/plate.FCStd"
+```
+
+## Configuring the AI backend
+
+CADAgent talks to any Anthropic‑compatible endpoint. The repo is pre‑wired for a local [LiteLLM](https://github.com/BerriAI/litellm) proxy:
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:4141/
+export ANTHROPIC_API_KEY=dummy
+export ANTHROPIC_MODEL=gpt-5-mini
+```
+
+Replace those values with your own provider/key/model if you don’t want to run a proxy. The same variables are picked up by the in‑app chat dock and by `scripts/cadagent`.
+
+## Tests
+
+```bash
+pixi run test-debug
+# or a single suite:
+ctest --test-dir build/debug -R Sketcher_tests_run
+```
+
+CADAgent‑specific tests live in [src/Mod/CADAgent/tests/](src/Mod/CADAgent/tests/) and run under `pytest` inside the pixi env.
+
+---
+
+## Repository layout
+
+| Path | What lives there |
+| --- | --- |
+| [src/App/](src/App/) | Core application (geometry, document, properties) — from FreeCAD |
+| [src/Gui/](src/Gui/) | Qt + Coin3D GUI — from FreeCAD |
+| [src/Mod/](src/Mod/) | Workbenches: Part, PartDesign, Sketcher, Assembly, FEM, …  |
+| [src/Mod/CADAgent/](src/Mod/CADAgent/) | **New** — chat dock, agent runtime, sessions, rewind/compaction |
+| [scripts/cadagent](scripts/cadagent) | Standalone CLI agent entrypoint |
+| [pixi.toml](pixi.toml) / [CMakePresets.json](CMakePresets.json) | Build tooling |
+| [tests/](tests/) | Upstream FreeCAD test suites |
+
+## Relationship to FreeCAD
+
+CADAgent is a **fork**, not a replacement. We track FreeCAD upstream and aim to:
+
+- Keep file format and Python API compatibility — `.FCStd` files round‑trip with stock FreeCAD.
+- Upstream non‑agent fixes back to FreeCAD whenever it makes sense.
+- Keep the agent code self‑contained in `src/Mod/CADAgent/` so it’s easy to reason about and easy to disable.
+
+Huge thanks to the FreeCAD community — none of this exists without their decades of work on a serious open‑source CAD kernel.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR. In short:
+
+- Keep changes minimal and focused on one problem.
+- Make sure the build and relevant tests pass.
+- Raw, unreviewed AI output is **not** acceptable as a contribution — review and defend every change you submit, even (especially) the ones an assistant helped you write.
+
+## Reporting issues
+
+Open a ticket on this repository’s issue tracker. Please include:
+
+- OS and how you built CADAgent (pixi version, compiler).
+- Output of `Help → About FreeCAD → Copy to clipboard` from inside the GUI.
+- Steps to reproduce, an example `.FCStd` if relevant, and — for agent issues — the prompt you used and the chat transcript.
+
+## License
+
+CADAgent inherits FreeCAD’s license. See [LICENSE](LICENSE). The CADAgent‑specific code under [src/Mod/CADAgent/](src/Mod/CADAgent/) is released under the same terms unless noted otherwise in a given file.
+
+## Privacy & security
+
+The agent only sends to your AI provider what you type into the chat (plus the tool calls it makes against your local FreeCAD process). No telemetry is added on top of upstream FreeCAD. See [PRIVACY_POLICY.md](PRIVACY_POLICY.md) and [SECURITY.md](SECURITY.md) for details.
