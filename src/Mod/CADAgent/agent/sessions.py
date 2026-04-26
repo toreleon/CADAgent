@@ -278,6 +278,59 @@ def unarchive(doc, session_id: str) -> bool:
     return _set_archived(doc, session_id, False)
 
 
+def assemble_history_tree(entries: list[dict]) -> list[dict]:
+    """Group ``entries`` into roots with one nesting level of branches.
+
+    Roots are entries with ``parent_id is None``. A branch whose ``parent_id``
+    points at another branch (grandchild) is re-attached under its nearest
+    root ancestor so callers (the QML history popup) only need to render a
+    single level of nesting. Branches whose parent is missing fall back to
+    being rendered as their own top-level row. Input dicts are never mutated.
+    """
+    if not entries:
+        return []
+    by_id = {
+        e.get("id"): e
+        for e in entries
+        if isinstance(e, dict) and e.get("id")
+    }
+
+    def _root_id(sid: str) -> str | None:
+        seen: set[str] = set()
+        cur = sid
+        while cur and cur not in seen:
+            seen.add(cur)
+            entry = by_id.get(cur)
+            if entry is None:
+                return None
+            parent = entry.get("parent_id")
+            if parent is None:
+                return cur
+            cur = parent
+        return None
+
+    out: list[dict] = []
+    root_index: dict[str, int] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("parent_id") is not None:
+            continue
+        cloned = dict(entry)
+        cloned["children"] = []
+        root_index[cloned.get("id")] = len(out)
+        out.append(cloned)
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("parent_id") is None:
+            continue
+        root = _root_id(entry.get("id"))
+        if root is None or root not in root_index:
+            cloned = dict(entry)
+            cloned["children"] = []
+            out.append(cloned)
+            continue
+        out[root_index[root]]["children"].append(dict(entry))
+    return out
+
+
 def truncate_rows(doc, session_id: str, keep_through_index: int) -> list:
     """Truncate persisted rows for ``session_id`` to ``rows[: keep_through_index + 1]``.
 

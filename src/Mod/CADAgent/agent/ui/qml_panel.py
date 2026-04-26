@@ -1000,10 +1000,12 @@ class QmlChatBridge(QtCore.QObject):
 
     @QtCore.Slot(result=str)
     def listSessions(self) -> str:
-        """Return the session index for the active doc as a JSON string.
+        """Return the per-doc session index as a JSON tree string.
 
-        Emitted to QML so the history popup can populate its ListView. Each
-        entry carries id/title/first_prompt/updated_at/turn_count.
+        Each entry carries id/title/first_prompt/updated_at/turn_count plus
+        the v2 fields ``parent_id``, ``branch_from_turn``, ``archived``.
+        Branches are nested under their root via a ``children`` list (single
+        level of nesting; grandchildren flatten under the nearest root).
         """
         if self._panel is None:
             return "[]"
@@ -1014,7 +1016,42 @@ class QmlChatBridge(QtCore.QObject):
             entries = cad_sessions.list_sessions(doc)
         except Exception:
             return "[]"
-        return json.dumps(entries)
+        return json.dumps(cad_sessions.assemble_history_tree(entries))
+
+    def _bound_doc_or_active(self):
+        if self._panel is None:
+            return None
+        return getattr(self._panel, "_bound_doc", None) or App.ActiveDocument
+
+    @QtCore.Slot(str, str)
+    def renameSession(self, session_id: str, title: str) -> None:
+        doc = self._bound_doc_or_active()
+        if doc is None or not session_id:
+            return
+        try:
+            cad_sessions.rename(doc, session_id, title or "")
+        except Exception:
+            pass
+
+    @QtCore.Slot(str)
+    def archiveSession(self, session_id: str) -> None:
+        doc = self._bound_doc_or_active()
+        if doc is None or not session_id:
+            return
+        try:
+            cad_sessions.archive(doc, session_id)
+        except Exception:
+            pass
+
+    @QtCore.Slot(str)
+    def unarchiveSession(self, session_id: str) -> None:
+        doc = self._bound_doc_or_active()
+        if doc is None or not session_id:
+            return
+        try:
+            cad_sessions.unarchive(doc, session_id)
+        except Exception:
+            pass
 
     @QtCore.Slot(str)
     def openSession(self, session_id: str) -> None:
@@ -1118,6 +1155,83 @@ class QmlChatBridge(QtCore.QObject):
         if fut is not None and not fut.done():
             fut.set_result(
                 Decision(allowed=allowed, scope=("once" if allowed else "deny"))
+            )
+
+    @QtCore.Slot(str, bool, str)
+    def requestRewind(self, row_id: str, fork: bool, new_text: str) -> None:
+        """Truncate the conversation at ``row_id`` and (optionally) resend.
+
+        Schedules ``runtime.rewind_to`` on the runtime's asyncio loop, then —
+        once it returns — reloads the persisted rows for the (possibly new)
+        sid into ``MessagesModel`` and, if ``new_text`` is non-empty,
+        immediately submits it as a fresh user prompt.
+        """
+        if not row_id or self._runtime is None or self._panel is None:
+            return
+        loop = getattr(self._runtime, "_loop", None)
+        if loop is None:
+            ensure = getattr(self._runtime, "_ensure_loop", None)
+            if callable(ensure):
+                loop = ensure()
+        if loop is None:
+            self._panel.show_error(
+                translate("CADAgent", "Agent runtime not ready.")
+            )
+            return
+        new_text = (new_text or "").strip()
+
+        fut = asyncio.run_coroutine_threadsafe(
+            self._runtime.rewind_to(row_id, bool(fork), new_text or None),
+            loop,
+        )
+
+        def _done(f):
+            try:
+                new_sid = f.result() or ""
+            except Exception as exc:
+                QtCore.QMetaObject.invokeMethod(
+                    self,
+                    "_rewindError",
+                    QtCore.Qt.QueuedConnection,
+                    QtCore.Q_ARG(str, str(exc)),
+                )
+                return
+            QtCore.QMetaObject.invokeMethod(
+                self,
+                "_rewindFinished",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, new_sid),
+                QtCore.Q_ARG(str, new_text),
+            )
+
+        fut.add_done_callback(_done)
+
+    @QtCore.Slot(str, str)
+    def _rewindFinished(self, new_sid: str, new_text: str) -> None:
+        if self._panel is None:
+            return
+        doc = self._panel._active_doc()
+        if doc is not None and new_sid:
+            try:
+                rows = cad_sessions.load_rows(doc, new_sid)
+            except Exception as exc:
+                self._panel.show_error(
+                    translate("CADAgent", "Rewind failed to reload rows: {0}").format(exc)
+                )
+                rows = None
+            if rows is not None:
+                self._model.load_snapshot(rows)
+            self._panel._current_session_id = new_sid
+        if new_text:
+            self.submit(new_text)
+        else:
+            self.scrollToEnd.emit()
+
+    @QtCore.Slot(str)
+    def _rewindError(self, message: str) -> None:
+        if self._panel is not None:
+            self._panel.show_error(
+                translate("CADAgent", "Rewind failed: {0}").format(message)
             )
 
     @QtCore.Slot(str, str)
