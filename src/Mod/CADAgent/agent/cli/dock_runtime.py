@@ -54,6 +54,12 @@ from ..permissions import make_can_use_tool, clear_session_allowlist
 from ..worker import client as worker_client
 from . import dock_tools, runtime as cli_runtime
 
+try:  # Wave-1 unit W1-A: workspace checkpointing. Optional at import so
+    # the runtime still loads if the module is missing or broken.
+    from .. import checkpoints as _checkpoints
+except Exception:  # pragma: no cover - defensive
+    _checkpoints = None
+
 
 _MCP_PREFIX = "mcp__cad__"
 
@@ -305,6 +311,16 @@ class DockRuntime:
         # tool_use_id -> plan_* short name, so we can parse the result of
         # plan_emit into milestoneUpsert events once it arrives.
         self._plan_tool_ids: dict[str, str] = {}
+        # Monotonic turn counter for the current session. Reset on
+        # ``start_new_session`` / ``resume_session``. Used by the W1-A
+        # checkpoint store and tagged onto persisted user rows so rewind
+        # (W1-B) can map a row back to its workspace snapshot.
+        self._turn_index: int = 0
+
+    @property
+    def last_turn_index(self) -> int:
+        """Index of the most recently submitted turn (0-based)."""
+        return self._turn_index
 
     # --- worker thread -------------------------------------------------
 
@@ -611,6 +627,13 @@ class DockRuntime:
             self.panel.show_error(f"Could not inspect active document: {exc}")
             return
         self._workspace_path = snap.get("path")
+        # Allocate this turn's index *before* dispatching, so the checkpoint
+        # filename and the user-row meta agree even if SDK output races
+        # ahead of the panel.
+        turn_index = self._turn_index
+        self._turn_index += 1
+        self._checkpoint_turn(turn_index, self._workspace_path)
+        self._tag_last_user_row(turn_index)
         # Auto-plan entry: if the user hasn't explicitly picked a mode and the
         # prompt looks complex, pin this turn to plan mode. The agent must
         # call ``exit_plan_mode`` to unlock execution.
@@ -630,6 +653,61 @@ class DockRuntime:
         self._current_future = asyncio.run_coroutine_threadsafe(
             self._ask(wrapped, attachments), loop
         )
+
+    def _current_sid(self) -> str | None:
+        """Best-effort session id for checkpoint keying.
+
+        Prefers the panel's most recent ``ResultMessage`` sid; falls back to
+        a queued ``_resume_sid`` so the very first turn after ``/resume``
+        still keys against the right session.
+        """
+        sid = getattr(self.panel, "_current_session_id", None)
+        return sid or self._resume_sid
+
+    def _checkpoint_turn(self, turn_index: int, doc_path: str | None) -> None:
+        """Save the active doc to the checkpoint store; never raise."""
+        if _checkpoints is None or not doc_path:
+            return
+        sid = self._current_sid()
+        if not sid:
+            # Pre-session-id turn: nothing to key against yet.
+            return
+        try:
+            _checkpoints.save(sid, turn_index, doc_path)
+        except Exception as exc:
+            try:
+                App.Console.PrintWarning(
+                    f"CAD Agent: checkpoint save failed for turn "
+                    f"{turn_index}: {exc}\n"
+                )
+            except Exception:
+                pass
+
+    def _tag_last_user_row(self, turn_index: int) -> None:
+        """Stamp ``turn_index`` onto the most recent user row's meta dict.
+
+        The QML panel adds the user row synchronously before calling
+        ``runtime.submit``, so the last user row in the model is the one we
+        just received. Failure here is non-fatal — the checkpoint is keyed
+        by ``turn_index`` regardless of UI state.
+        """
+        try:
+            model = getattr(self.panel, "_model", None)
+            if model is None:
+                return
+            rows = getattr(model, "_rows", None)
+            if not rows:
+                return
+            for i in range(len(rows) - 1, -1, -1):
+                if rows[i].get("kind") == "user":
+                    meta = dict(rows[i].get("meta") or {})
+                    meta["turn_index"] = turn_index
+                    rows[i]["meta"] = meta
+                    if hasattr(model, "_emit_changed"):
+                        model._emit_changed(i)
+                    return
+        except Exception:
+            pass
 
     def interrupt(self) -> None:
         if self._loop is None or self.client is None:
@@ -653,6 +731,7 @@ class DockRuntime:
         if self._turn_in_flight():
             return False
         self._resume_sid = None
+        self._turn_index = 0
         clear_session_allowlist()
         if self.client is not None and self._loop is not None:
             asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
@@ -663,6 +742,11 @@ class DockRuntime:
         if self._turn_in_flight():
             return False
         self._resume_sid = session_id or None
+        # Resumed sessions continue numbering from "after the last persisted
+        # turn"; we don't have that count here, so reset to 0 and let the
+        # next turn start the new branch's count. W1-B will fix this up
+        # when it re-keys to the resumed sid.
+        self._turn_index = 0
         if self.client is not None and self._loop is not None:
             asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
         return True
