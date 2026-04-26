@@ -29,6 +29,7 @@ caller-supplied sid unchanged.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import tempfile
@@ -163,11 +164,55 @@ def _truncate_jsonl_entries(entries: list[dict], keep_user_count: int) -> list[d
 # ---------------------------------------------------------------------------
 
 
+def _make_synthetic_seed_rows(
+    session_id: str, summary_text: str
+) -> list[dict]:
+    """Build a two-row synthetic user/assistant exchange to seed a forked JSONL.
+
+    The summary is presented as if it were the prior user prompt; the assistant
+    acknowledges it. Subsequent real rows must chain from the assistant uuid.
+    """
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    user_uuid = str(uuid.uuid4())
+    assistant_uuid = str(uuid.uuid4())
+    user_row = {
+        "parentUuid": None,
+        "isSidechain": False,
+        "type": "user",
+        "uuid": user_uuid,
+        "timestamp": now_iso,
+        "sessionId": session_id,
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": summary_text}],
+        },
+    }
+    assistant_row = {
+        "parentUuid": user_uuid,
+        "isSidechain": False,
+        "type": "assistant",
+        "uuid": assistant_uuid,
+        "timestamp": now_iso,
+        "sessionId": session_id,
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Acknowledged. Continuing from the summary above.",
+                }
+            ],
+        },
+    }
+    return [user_row, assistant_row]
+
+
 def truncate_session(
     doc,
     sid: str,
     keep_through_row_index: int,
     fork: bool,
+    seed_summary: str | None = None,
 ) -> str:
     """Truncate CADAgent rows + SDK JSONL up to ``keep_through_row_index``.
 
@@ -210,8 +255,19 @@ def truncate_session(
                 for e in kept
                 if isinstance(e, dict)
             ]
+            if seed_summary:
+                seed_rows = _make_synthetic_seed_rows(target_sid, seed_summary)
+                # Re-parent the first real row to the synthetic assistant so
+                # the SDK sees an unbroken parentUuid chain.
+                if kept:
+                    first = dict(kept[0])
+                    first["parentUuid"] = seed_rows[-1]["uuid"]
+                    kept = [first, *kept[1:]]
+                kept = [*seed_rows, *kept]
             _atomic_write_jsonl(jsonl.parent / f"{target_sid}.jsonl", kept)
         else:
+            # fork=False intentionally ignores seed_summary: rewriting the live
+            # session in place must not inject synthetic turns.
             _atomic_write_jsonl(jsonl, kept)
 
     # Persist truncated rows under the target sid.
