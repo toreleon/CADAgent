@@ -57,6 +57,29 @@ def _require_doc() -> Any:
     return doc
 
 
+def current_doc() -> Any:
+    """Public accessor for sibling handler modules (e.g. ``inspect``)."""
+    return _require_doc()
+
+
+def reload_current() -> Any:
+    """Re-open the current doc from disk (post-Bash mutation refresh)."""
+    doc = _state["doc"]
+    if doc is None:
+        raise RuntimeError("no document open; call doc.open first")
+    path = getattr(doc, "FileName", "") or ""
+    if not path:
+        raise RuntimeError("current doc has no FileName; cannot reload")
+    try:
+        App.closeDocument(doc.Name)
+    except Exception:
+        pass
+    _state["doc"] = None
+    new_doc = App.openDocument(path)
+    _state["doc"] = new_doc
+    return new_doc
+
+
 @registry.handler("doc.open")
 def doc_open(path: str) -> dict[str, Any]:
     """Open ``path`` (or activate the existing load) and make it current."""
@@ -108,6 +131,13 @@ def doc_inspect(
         "document": _summary(doc),
         "objects": [_describe(o, prop_list) for o in doc.Objects],
     }
+
+
+@registry.handler("doc.reload")
+def doc_reload() -> dict[str, Any]:
+    """Re-open the current doc from disk; needed after a Bash mutation."""
+    doc = reload_current()
+    return _summary(doc)
 
 
 @registry.handler("doc.recompute")

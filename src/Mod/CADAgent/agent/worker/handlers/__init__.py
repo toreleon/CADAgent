@@ -9,5 +9,6 @@ imports this package before calling :func:`agent.worker.server.main`.
 from __future__ import annotations
 
 from . import document  # noqa: F401  -- import for side effects
+from . import inspect  # noqa: F401  -- import for side effects
 
-__all__ = ["document"]
+__all__ = ["document", "inspect"]

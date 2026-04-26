@@ -1,25 +1,57 @@
 #!/usr/bin/env bash
 # cadagent — standalone Option A entrypoint. Runs ClaudeSDKClient in plain
 # Python (no FreeCAD import). Drives FreeCAD via the built-in Bash tool
-# invoking FreeCADCmd as subprocesses.
+# invoking FreeCADCmd as subprocesses, with a long-lived FreeCADCmd worker
+# behind the inspect/auto-probe MCP surface.
 #
 # Usage:
 #   scripts/cadagent "create a 20x10x5mm plate at /tmp/plate.FCStd"
+#   scripts/cadagent --image drawings/foo.png "build the part shown"
+#   CADAGENT_PIXI_PYTHON=/path/to/python scripts/cadagent ...
 #
 # Requires:
 #   - ANTHROPIC_API_KEY set (or ANTHROPIC_BASE_URL for a proxy)
-#   - pixi env installed (provides claude-agent-sdk)
-#   - build/debug/bin/FreeCADCmd available (the agent invokes it via Bash)
+#   - pixi env installed (provides claude-agent-sdk). The script walks up
+#     from its own location to find a .pixi/envs/default/bin/python so it
+#     also works when run from a git worktree without its own .pixi tree;
+#     override with CADAGENT_PIXI_PYTHON for non-standard layouts.
+#   - build/debug/bin/FreeCADCmd available (the agent invokes it via Bash;
+#     override with CADAGENT_FREECADCMD).
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PY="$HERE/.pixi/envs/default/bin/python"
 
-if [[ ! -x "$PY" ]]; then
-    echo "cadagent: pixi python not found at $PY — run 'pixi install' first." >&2
+# --- locate pixi python --------------------------------------------------
+PY="${CADAGENT_PIXI_PYTHON:-}"
+if [[ -z "$PY" ]]; then
+    candidate="$HERE"
+    while [[ -n "$candidate" && "$candidate" != "/" ]]; do
+        if [[ -x "$candidate/.pixi/envs/default/bin/python" ]]; then
+            PY="$candidate/.pixi/envs/default/bin/python"
+            break
+        fi
+        candidate="$(dirname "$candidate")"
+    done
+fi
+if [[ -z "$PY" || ! -x "$PY" ]]; then
+    echo "cadagent: pixi python not found (searched up from $HERE). Set CADAGENT_PIXI_PYTHON or run 'pixi install'." >&2
     exit 2
 fi
+
+# --- locate FreeCADCmd (walk same way) -----------------------------------
+if [[ -z "${CADAGENT_FREECADCMD:-}" ]]; then
+    candidate="$HERE"
+    while [[ -n "$candidate" && "$candidate" != "/" ]]; do
+        if [[ -x "$candidate/build/debug/bin/FreeCADCmd" ]]; then
+            export CADAGENT_FREECADCMD="$candidate/build/debug/bin/FreeCADCmd"
+            break
+        fi
+        candidate="$(dirname "$candidate")"
+    done
+fi
+# Ensure inheritance into any subshell the agent spawns (Bash heredocs etc.)
+[[ -n "${CADAGENT_FREECADCMD:-}" ]] && export CADAGENT_FREECADCMD
 
 # Put the CAD Agent module on PYTHONPATH so ``import agent.cli.runtime``
 # works without installing the package. Also keep $HOME redirected so any
