@@ -6,10 +6,10 @@ The claude_agent_sdk persists full transcripts itself (under
 and ``get_session_messages()``. We only need to remember *which* SDK session
 IDs belong to which FreeCAD document, plus lightweight display metadata.
 
-Schema::
+Schema (v2)::
 
     {
-        "schema_version": 1,
+        "schema_version": 2,
         "sessions": [
             {
                 "id": "<uuid>",
@@ -17,11 +17,18 @@ Schema::
                 "first_prompt": "...",
                 "created_at": "2026-04-21T19:50:10",
                 "updated_at": "2026-04-21T19:55:02",
-                "turn_count": 3
+                "turn_count": 3,
+                "parent_id": null,         # v2: source sid if branched
+                "branch_from_turn": null,  # v2: turn index this branch forked at
+                "archived": false          # v2: hide from default listings
             },
             ...
         ]
     }
+
+v1 entries (lacking ``parent_id`` / ``branch_from_turn`` / ``archived``) are
+auto-migrated on load with default values, and the index is re-saved on the
+next mutating call.
 """
 
 from __future__ import annotations
@@ -34,8 +41,15 @@ import tempfile
 import FreeCAD as App
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_TITLE_LEN = 80
+
+# v2 fields injected into legacy session entries on load.
+_V2_DEFAULTS = {
+    "parent_id": None,
+    "branch_from_turn": None,
+    "archived": False,
+}
 
 
 def _now_iso() -> str:
@@ -108,6 +122,24 @@ def load_rows(doc, session_id: str) -> list:
     return list(rows) if isinstance(rows, list) else []
 
 
+def _migrate_in_memory(data: dict) -> dict:
+    """Bring a loaded index dict up to the current schema version.
+
+    Adds v2 fields with defaults to any session entry that lacks them and
+    bumps ``schema_version``. Pure in-memory; the next ``_save`` persists.
+    """
+    data["schema_version"] = SCHEMA_VERSION
+    sessions = data.get("sessions") or []
+    for entry in sessions:
+        if not isinstance(entry, dict):
+            continue
+        for key, default in _V2_DEFAULTS.items():
+            if key not in entry:
+                entry[key] = default
+    data["sessions"] = sessions
+    return data
+
+
 def load(doc) -> dict:
     path = index_path(doc)
     if not os.path.exists(path):
@@ -121,7 +153,7 @@ def load(doc) -> dict:
         merged.update(data)
         if not isinstance(merged.get("sessions"), list):
             merged["sessions"] = []
-        return merged
+        return _migrate_in_memory(merged)
     except (OSError, json.JSONDecodeError):
         return _default()
 
@@ -194,6 +226,7 @@ def record_turn(doc, session_id: str, first_prompt: str | None) -> dict:
         "created_at": now,
         "updated_at": now,
         "turn_count": 1,
+        **_V2_DEFAULTS,
     }
     sessions.append(entry)
     data["sessions"] = sessions
@@ -209,6 +242,40 @@ def rename(doc, session_id: str, title: str) -> bool:
             _save(doc, data)
             return True
     return False
+
+
+def list_branches_of(doc, session_id: str) -> list[dict]:
+    """Return session entries whose ``parent_id`` matches ``session_id``.
+
+    Order: newest ``updated_at`` first. Includes archived branches.
+    """
+    branches = [
+        entry
+        for entry in load(doc).get("sessions") or []
+        if entry.get("parent_id") == session_id
+    ]
+    branches.sort(key=lambda s: s.get("updated_at") or "", reverse=True)
+    return branches
+
+
+def _set_archived(doc, session_id: str, value: bool) -> bool:
+    data = load(doc)
+    for entry in data.get("sessions") or []:
+        if entry.get("id") == session_id:
+            entry["archived"] = bool(value)
+            _save(doc, data)
+            return True
+    return False
+
+
+def archive(doc, session_id: str) -> bool:
+    """Mark ``session_id`` as archived. Returns True if the entry existed."""
+    return _set_archived(doc, session_id, True)
+
+
+def unarchive(doc, session_id: str) -> bool:
+    """Inverse of :func:`archive`."""
+    return _set_archived(doc, session_id, False)
 
 
 def delete(doc, session_id: str) -> bool:
