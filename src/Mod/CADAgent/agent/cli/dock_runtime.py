@@ -163,6 +163,10 @@ class _PanelProxy(QtCore.QObject):
     # Hook lifecycle event — (event_name, payload_dict, result_dict). Consumed
     # by W2-E to render hook activity rows; safe to leave unconnected.
     hookEvent = QtCore.Signal(str, object, object)
+    # Active document changed — fires when the runtime's tracked workspace
+    # path moves to a new document (or to None). Consumed by W2-D's
+    # WorkspaceChip to refresh its label.
+    activeDocChanged = QtCore.Signal(str)
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -327,6 +331,71 @@ class DockRuntime:
     def last_turn_index(self) -> int:
         """Index of the most recently submitted turn (0-based)."""
         return self._turn_index
+
+    def _set_workspace_path(self, path: str | None) -> None:
+        """Update the tracked workspace path and notify subscribers on change."""
+        new = path or None
+        if new == self._workspace_path:
+            return
+        self._workspace_path = new
+        try:
+            self._proxy.activeDocChanged.emit(new or "")
+        except Exception:
+            pass
+
+    def list_open_docs(self) -> list[dict]:
+        """Return one entry per open FreeCAD document for the workspace chip.
+
+        Each entry: ``{"name", "label", "path", "active"}``. ``label`` is the
+        document's display label (preferred for UI); ``name`` is the internal
+        identifier the agent's ``gui_set_active_document`` tool expects.
+        """
+        try:
+            docs = list(App.listDocuments().values())
+        except Exception:
+            return []
+        active = getattr(App, "ActiveDocument", None)
+        active_name = getattr(active, "Name", None) if active is not None else None
+        out: list[dict] = []
+        for d in docs:
+            name = getattr(d, "Name", "") or ""
+            out.append({
+                "name": name,
+                "label": getattr(d, "Label", "") or name,
+                "path": getattr(d, "FileName", "") or "",
+                "active": name == active_name,
+            })
+        return out
+
+    def set_active_document(self, label_or_name: str) -> bool:
+        """Activate an already-open doc by ``Name`` (preferred) or ``Label``.
+
+        Mirrors the agent's ``gui_set_active_document`` tool but is callable
+        from the GUI thread without an LLM round-trip. Returns ``True`` if a
+        match was found and activated.
+        """
+        target = (label_or_name or "").strip()
+        if not target:
+            return False
+        try:
+            docs = App.listDocuments()
+        except Exception:
+            return False
+        match = docs.get(target)
+        if match is None:
+            for d in docs.values():
+                if (getattr(d, "Label", "") or "") == target:
+                    match = d
+                    break
+        if match is None:
+            return False
+        try:
+            App.setActiveDocument(match.Name)
+        except Exception:
+            return False
+        path = getattr(match, "FileName", "") or None
+        self._set_workspace_path(path)
+        return True
 
     # --- hooks ---------------------------------------------------------
 
@@ -700,7 +769,7 @@ class DockRuntime:
         except Exception as exc:
             self.panel.show_error(f"Could not inspect active document: {exc}")
             return
-        self._workspace_path = snap.get("path")
+        self._set_workspace_path(snap.get("path"))
         # UserPromptSubmit hook — a configured command can veto the turn
         # before any LLM round-trip. We surface the message via show_error
         # so the user sees why the prompt was dropped.

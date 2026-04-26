@@ -55,6 +55,7 @@ SET(CADAgent_UI_QML
     agent/ui/qml/ModesPopup.qml
     agent/ui/qml/PlanBanner.qml
     agent/ui/qml/TranscriptView.qml
+    agent/ui/qml/WorkspaceChip.qml
 )
 
 SET(CADAgent_UI_QML_TRANSCRIPT

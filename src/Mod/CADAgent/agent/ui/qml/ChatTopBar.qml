@@ -9,6 +9,8 @@ RowLayout {
 
     property var bridge
     property var theme
+    property Item panelItem
+    property real panelWidth: 360
     property alias historyButton: historyBtn
     signal openHistory()
 
@@ -18,6 +20,13 @@ RowLayout {
     readonly property string monoFamily: theme.monoFamily
 
     spacing: 6
+
+    WorkspaceChip {
+        bridge: topbar.bridge
+        theme: topbar.theme
+        panelItem: topbar.panelItem
+        panelWidth: topbar.panelWidth
+    }
 
     Text {
         text: !bridge || bridge.currentAgent === "main" ? "" : "[" + bridge.currentAgent + "]"
