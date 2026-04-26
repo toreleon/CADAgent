@@ -167,6 +167,9 @@ class _PanelProxy(QtCore.QObject):
     # path moves to a new document (or to None). Consumed by W2-D's
     # WorkspaceChip to refresh its label.
     activeDocChanged = QtCore.Signal(str)
+    # Worker-thread rewind asks the GUI thread to reload the active document
+    # from disk after a checkpoint restore. Path is the .FCStd file.
+    docReloadRequested = QtCore.Signal(str)
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -193,6 +196,8 @@ class _PanelProxy(QtCore.QObject):
         if hasattr(panel, "on_plan_exited"):
             self.planExited.connect(panel.on_plan_exited)
         self.editApprovalRequest.connect(self._on_edit_approval_request)
+        if hasattr(panel, "reload_doc"):
+            self.docReloadRequested.connect(panel.reload_doc)
 
     def _on_edit_approval_request(self, req_id, summary, script, cf_future):
         try:
@@ -975,22 +980,37 @@ class DockRuntime:
         except Exception:
             row_index = -1
 
+        if row_index < 0:
+            # Row id no longer in the model — refuse rather than wiping
+            # the transcript on a stale click.
+            return sid
+
+        # Rewind/edit semantics: drop the targeted user row and everything
+        # after it. The caller resubmits a fresh prompt (edit/fork) or the
+        # user types a new one in the composer (plain rewind).
+        keep_through = row_index - 1
+
         try:
             from .. import rewind as _rewind
-            new_sid = _rewind.truncate_session(doc, sid, row_index, fork)
+            new_sid = _rewind.truncate_session(doc, sid, keep_through, fork)
         except Exception:
             new_sid = sid
 
+        # Workspace restore is keyed by the *original* sid — that is where
+        # the checkpoint was saved, even when forking into a new sid.
         if turn_index is not None:
             try:
                 from .. import checkpoints as _checkpoints
                 doc_path = getattr(doc, "FileName", "") or ""
-                if doc_path:
-                    _checkpoints.restore(new_sid, turn_index, doc_path)
+                if doc_path and _checkpoints.restore(sid, turn_index, doc_path):
+                    self._proxy.docReloadRequested.emit(doc_path)
             except Exception:
                 pass
 
         self._resume_sid = new_sid
+        # Re-key future checkpoints from the restore point.
+        if isinstance(turn_index, int):
+            self._turn_index = turn_index
         return new_sid
 
     def aclose(self) -> None:

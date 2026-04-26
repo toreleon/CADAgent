@@ -1436,6 +1436,35 @@ class QmlChatPanel(QtWidgets.QWidget):
     def _active_doc(self):
         return self._bound_doc or App.ActiveDocument
 
+    def reload_doc(self, doc_path: str) -> None:
+        """Reload ``doc_path`` from disk into FreeCAD, replacing the open copy.
+
+        Called after a checkpoint restore overwrites the .FCStd on disk —
+        without this, FreeCAD keeps the stale in-memory document and the
+        user sees no visual change. Runs on the GUI thread (queued via
+        :class:`_PanelProxy.docReloadRequested`).
+        """
+        if not doc_path:
+            return
+        try:
+            target = None
+            for d in App.listDocuments().values():
+                if (getattr(d, "FileName", "") or "") == doc_path:
+                    target = d
+                    break
+            if target is not None:
+                App.closeDocument(target.Name)
+            new_doc = App.openDocument(doc_path)
+            self._bound_doc = new_doc
+            try:
+                App.setActiveDocument(new_doc.Name)
+            except Exception:
+                pass
+        except Exception as exc:
+            self.show_error(
+                translate("CADAgent", "Could not reload document: {0}").format(exc)
+            )
+
     def _persist_transcript(self) -> None:
         sid = self._current_session_id
         doc = self._active_doc()
