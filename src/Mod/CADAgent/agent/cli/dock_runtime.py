@@ -49,7 +49,8 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from .. import gui_thread, hooks, ui_bridge
+from .. import compaction as _compaction
+from .. import gui_thread, hooks, sessions as _sessions, ui_bridge
 from ..permissions import make_can_use_tool, clear_session_allowlist
 from ..worker import client as worker_client
 from . import dock_tools, runtime as cli_runtime
@@ -151,6 +152,8 @@ class _PanelProxy(QtCore.QObject):
     verificationResult = QtCore.Signal(str, object)
     decisionRecorded = QtCore.Signal(str, object)
     compactionEvent = QtCore.Signal(object)
+    contextUsage = QtCore.Signal(int, int)
+    compactingChanged = QtCore.Signal(bool)
     subagentSpan = QtCore.Signal(str, str, str)
     permissionModeChanged = QtCore.Signal(str)
     streamState = QtCore.Signal(str, bool)
@@ -198,6 +201,22 @@ class _PanelProxy(QtCore.QObject):
         self.editApprovalRequest.connect(self._on_edit_approval_request)
         if hasattr(panel, "reload_doc"):
             self.docReloadRequested.connect(panel.reload_doc)
+        bridge = getattr(panel, "bridge", None)
+        if bridge is not None:
+            if hasattr(bridge, "_on_context_usage"):
+                try:
+                    self.contextUsage.connect(bridge._on_context_usage)
+                except Exception:
+                    pass
+            if hasattr(bridge, "_on_compacting_changed"):
+                try:
+                    self.compactingChanged.connect(bridge._on_compacting_changed)
+                except Exception:
+                    pass
+            try:
+                self.compactionEvent.connect(panel.emit_compaction)
+            except Exception:
+                pass
 
     def _on_edit_approval_request(self, req_id, summary, script, cf_future):
         try:
@@ -331,6 +350,19 @@ class DockRuntime:
         # tool_use_id -> (tool_name, tool_input) so PostToolUse hooks can see
         # the original invocation alongside the SDK's tool_result content.
         self._pending_tool_calls: dict[str, tuple[str, Any]] = {}
+        # Auto-compact state. ``_session_tokens`` accumulates ResultMessage
+        # usage; ``_pending_auto_compact`` is set after a turn that crossed
+        # the threshold and triggers a compact at the start of the next
+        # ``submit``. ``_compacting`` guards against re-entry while a
+        # compaction coroutine is in flight. ``_last_user_prompt`` is stashed
+        # for the overflow-retry path. ``_overflow_retried`` is True after we
+        # auto-retry once so a second overflow surfaces normally.
+        self._session_tokens = _compaction.SessionTokens()
+        self._pending_auto_compact: bool = False
+        self._compacting: bool = False
+        self._last_user_prompt: str | None = None
+        self._last_user_attachments: list[str] | None = None
+        self._overflow_retried: bool = False
 
     @property
     def last_turn_index(self) -> int:
@@ -526,24 +558,58 @@ class DockRuntime:
         self.client = ClaudeSDKClient(options=options)
         await self.client.__aenter__()
 
+    async def _dispatch_turn(
+        self, user_text: str, attachments: list[str] | None
+    ) -> None:
+        """Open a client (if needed), submit ``user_text``, and route replies."""
+        await self._ensure_client()
+        assert self.client is not None
+        if attachments:
+            await self.client.query(_multimodal_prompt(user_text, attachments))
+        else:
+            await self.client.query(user_text)
+        async for msg in self.client.receive_response():
+            self._route_message(msg)
+
     async def _ask(
         self, user_text: str, attachments: list[str] | None = None
     ) -> None:
+        # Drain a queued auto-compact (set by the previous turn's ResultMessage)
+        # before opening the next SDK client so the post-compact ``_resume_sid``
+        # is what gets connected.
+        if self._pending_auto_compact and not self._compacting:
+            self._pending_auto_compact = False
+            try:
+                await self._run_compaction(reason="auto")
+            except Exception:
+                pass
         try:
-            await self._ensure_client()
-            assert self.client is not None
-            if attachments:
-                await self.client.query(
-                    _multimodal_prompt(user_text, attachments)
+            await self._dispatch_turn(user_text, attachments)
+        except BaseException as exc:
+            if (
+                _compaction.is_context_overflow_error(exc)
+                and not self._overflow_retried
+                and self._last_user_prompt is not None
+            ):
+                self._overflow_retried = True
+                try:
+                    await self._run_compaction(reason="forced")
+                except Exception:
+                    pass
+                try:
+                    await self._dispatch_turn(
+                        self._last_user_prompt, self._last_user_attachments
+                    )
+                except Exception as retry_exc:
+                    self._proxy.error.emit(
+                        f"{retry_exc}\n\n{traceback.format_exc(limit=3)}"
+                    )
+            elif isinstance(exc, Exception):
+                self._proxy.error.emit(
+                    f"{exc}\n\n{traceback.format_exc(limit=3)}"
                 )
             else:
-                await self.client.query(user_text)
-            async for msg in self.client.receive_response():
-                self._route_message(msg)
-        except Exception as exc:
-            self._proxy.error.emit(
-                f"{exc}\n\n{traceback.format_exc(limit=3)}"
-            )
+                raise
         finally:
             try:
                 gui_thread.run_sync(_reload_active_doc_if_stale, timeout=30.0)
@@ -598,6 +664,7 @@ class DockRuntime:
             if sid:
                 self._proxy.sessionChanged.emit(sid)
             self._proxy.resultMsg.emit(msg)
+            self._record_usage(msg, sid)
 
     # --- tool routing helpers ------------------------------------------
     #
@@ -758,6 +825,182 @@ class DockRuntime:
                 str(mid), str(title), str(status), i + 1, total
             )
 
+    # --- auto-compaction ------------------------------------------------
+
+    def _model_name(self) -> str:
+        """Return the configured model id (param store → env fallback)."""
+        try:
+            params = App.ParamGet(
+                "User parameter:BaseApp/Preferences/Mod/CADAgent"
+            )
+            model = params.GetString("Model", "") or ""
+        except Exception:
+            model = ""
+        return model or os.environ.get("ANTHROPIC_MODEL", "") or ""
+
+    def _settings(self) -> dict:
+        """Best-effort merge of user + project settings.json for compaction."""
+        try:
+            return hooks.load_settings(self._doc_dir())
+        except Exception:
+            return {}
+
+    def _usage_to_dict(self, usage: Any) -> dict:
+        """Coerce SDK usage (object or dict) into a flat int dict."""
+        if usage is None:
+            return {}
+        out: dict[str, int] = {}
+        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens"):
+            if isinstance(usage, dict):
+                val = usage.get(key)
+            else:
+                val = getattr(usage, key, None)
+            try:
+                out[key] = int(val) if val is not None else 0
+            except (TypeError, ValueError):
+                out[key] = 0
+        return out
+
+    def _record_usage(self, msg, sid: str | None) -> None:
+        """Accumulate tokens, persist to sessions.json, and arm auto-compact.
+
+        Defensive: failures here must never break the turn boundary. Persistent
+        token storage is best-effort; the in-memory ``_session_tokens`` is the
+        source of truth for the threshold check.
+        """
+        usage = getattr(msg, "usage", None)
+        try:
+            self._session_tokens.accumulate(usage)
+        except Exception:
+            return
+        usage_dict = self._usage_to_dict(usage)
+        if sid:
+            try:
+                doc = self._active_doc_for_sessions()
+                if doc is not None:
+                    _sessions.update_tokens(doc, sid, usage_dict)
+            except Exception:
+                pass
+        try:
+            limit = _compaction.context_limit_for(
+                self._model_name(), self._settings()
+            )
+            used = self._session_tokens.effective_context_used()
+            self._proxy.contextUsage.emit(int(used), int(limit))
+            if _compaction.should_auto_compact(used, limit, self._settings()):
+                self._pending_auto_compact = True
+        except Exception:
+            pass
+
+    def _active_doc_for_sessions(self):
+        """Return the FreeCAD document used as the session-store key."""
+        panel = self.panel
+        doc = getattr(panel, "_bound_doc", None)
+        if doc is None:
+            doc = getattr(App, "ActiveDocument", None)
+        return doc
+
+    def _current_panel_sid(self) -> str | None:
+        return (
+            getattr(self.panel, "_current_session_id", None)
+            or self._resume_sid
+        )
+
+    def _gather_rows_for_summary(self) -> list:
+        """Snapshot the panel transcript for the summariser."""
+        panel = self.panel
+        getter = getattr(panel, "get_rows", None)
+        if callable(getter):
+            try:
+                rows = getter()
+                if isinstance(rows, list):
+                    return list(rows)
+            except Exception:
+                pass
+        try:
+            model = getattr(panel, "_model", None) or getattr(panel, "model", None)
+            if model is not None:
+                rows = getattr(model, "_rows", None)
+                if isinstance(rows, list):
+                    return list(rows)
+        except Exception:
+            pass
+        return []
+
+    async def _run_compaction(self, reason: str) -> None:
+        """Summarise the live transcript, fork the session, and reset tokens.
+
+        Idempotent against re-entry — concurrent calls return early. Surfaces
+        progress via ``compactingChanged`` and a final ``compactionEvent`` row
+        on the panel.
+        """
+        if self._compacting:
+            return
+        self._compacting = True
+        try:
+            self._proxy.compactingChanged.emit(True)
+        except Exception:
+            pass
+        try:
+            rows = self._gather_rows_for_summary()
+            tokens_before = self._session_tokens.effective_context_used()
+            # TODO(Wave-3): pass real sdk_options so summarize_transcript can
+            # spin up a one-shot query() for an LLM-authored summary.
+            summary = _compaction.summarize_transcript(
+                rows, self._model_name(), {}
+            )
+            sid = self._current_panel_sid()
+            doc = self._active_doc_for_sessions()
+            new_sid = sid or ""
+            if doc is not None and sid:
+                try:
+                    new_sid = _compaction.compact_session(
+                        doc, sid, rows, summary, fork=True
+                    )
+                except Exception:
+                    new_sid = sid
+            if new_sid:
+                self._resume_sid = new_sid
+            try:
+                await self._aclose()
+            except Exception:
+                pass
+            # Char→token rough heuristic so the post-compact UI doesn't read 0.
+            self._session_tokens.reset(seed_size=max(0, len(summary) // 4))
+            try:
+                limit = _compaction.context_limit_for(
+                    self._model_name(), self._settings()
+                )
+                used = self._session_tokens.effective_context_used()
+                self._proxy.contextUsage.emit(int(used), int(limit))
+                self._proxy.compactionEvent.emit({
+                    "tokensBefore": int(tokens_before),
+                    "tokensAfter": int(used),
+                    "reason": reason,
+                    "summary": summary,
+                    "archivePath": "",
+                })
+            except Exception:
+                pass
+        finally:
+            self._compacting = False
+            try:
+                self._proxy.compactingChanged.emit(False)
+            except Exception:
+                pass
+
+    def request_compaction(self, reason: str = "manual") -> None:
+        """Schedule ``_run_compaction`` on the worker loop (GUI-thread safe)."""
+        if self._compacting:
+            return
+        loop = self._ensure_loop()
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._run_compaction(reason), loop
+            )
+        except Exception:
+            pass
+
     # --- entry points --------------------------------------------------
 
     def submit(
@@ -806,6 +1049,11 @@ class DockRuntime:
             if self.client is not None and self._loop is not None:
                 asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
         wrapped = f"{_build_preamble(snap)}\n\n{user_text}"
+        # Stash for the overflow-retry path: ``_ask`` resubmits this exactly
+        # once if the SDK raises a context-overflow error mid-turn.
+        self._last_user_prompt = wrapped
+        self._last_user_attachments = list(attachments) if attachments else None
+        self._overflow_retried = False
         loop = self._ensure_loop()
         self._current_future = asyncio.run_coroutine_threadsafe(
             self._ask(wrapped, attachments), loop
