@@ -33,6 +33,7 @@ ListView {
             case "subagent":     return "transcript/SubagentRow.qml"
             case "plan_file":    return "transcript/PlanFileRow.qml"
             case "edit_approval":return "transcript/EditApprovalRow.qml"
+            case "hook_event":   return "transcript/HooksStatusRow.qml"
             default:             return "transcript/SystemRow.qml"
         }
     }

@@ -46,6 +46,7 @@ except ImportError:  # pragma: no cover - PySide2 fallback
     from PySide2.QtQuick import QQuickView
     from PySide2.QtQml import QQmlContext  # noqa: F401
 
+from .. import hooks as cad_hooks
 from .. import sessions as cad_sessions
 from ..permissions import Decision
 
@@ -486,6 +487,24 @@ class MessagesModel(QtCore.QAbstractListModel):
         }
         self._append({"kind": "compaction", "text": "", "meta": meta})
 
+    def add_hook_event(
+        self,
+        event: str,
+        message: str | None,
+        decision: str | None,
+    ) -> None:
+        self._close_assistant()
+        self._collapse_thinking()
+        self._append({
+            "kind": "hook_event",
+            "text": message or "",
+            "meta": {
+                "event": event or "",
+                "message": message or "",
+                "decision": decision or "",
+            },
+        })
+
     # Subagent span — begin_subagent adds a header row and sets the
     # inherited agent attribution for every row that follows until
     # end_subagent() clears it.
@@ -644,6 +663,28 @@ class QmlChatBridge(QtCore.QObject):
     def bind(self, panel: "QmlChatPanel", runtime) -> None:
         self._panel = panel
         self._runtime = runtime
+        proxy = getattr(runtime, "_proxy", None)
+        sig = getattr(proxy, "hookEvent", None) if proxy is not None else None
+        if sig is not None:
+            try:
+                sig.connect(self._on_hook_event)
+            except Exception:
+                pass
+
+    @QtCore.Slot(str, object, object)
+    def _on_hook_event(self, event_name, payload, result) -> None:
+        if not isinstance(result, dict):
+            return
+        decision = result.get("decision")
+        message = result.get("message")
+        if decision != "block" and not (isinstance(message, str) and message.strip()):
+            return
+        self._model.add_hook_event(
+            event_name or "",
+            message if isinstance(message, str) else None,
+            decision if isinstance(decision, str) else None,
+        )
+        self.scrollToEnd.emit()
 
     # --- Properties --------------------------------------------------
 
@@ -1010,6 +1051,24 @@ class QmlChatBridge(QtCore.QObject):
             Gui.runCommand("CADAgent_ConfigureLLM")
         except Exception as exc:
             self._model.add_error(str(exc))
+
+    @QtCore.Slot(result=str)
+    def activeHooksSettings(self) -> str:
+        """Return ``{source, settings}`` JSON for the topbar hooks viewer."""
+        doc_dir: str | None = None
+        if self._panel is not None:
+            doc = getattr(self._panel, "_bound_doc", None) or App.ActiveDocument
+            path = getattr(doc, "FileName", "") if doc is not None else ""
+            if path:
+                try:
+                    doc_dir = os.path.dirname(path) or None
+                except (TypeError, ValueError):
+                    doc_dir = None
+        try:
+            source, settings = cad_hooks.settings_source(doc_dir)
+        except Exception:
+            source, settings = "none", {}
+        return json.dumps({"source": source, "settings": settings})
 
     @QtCore.Slot(str)
     def setPermissionMode(self, mode: str) -> None:
