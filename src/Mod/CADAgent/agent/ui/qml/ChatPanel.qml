@@ -98,6 +98,13 @@ Rectangle {
             theme: root
         }
 
+        TodosPanel {
+            Layout.fillWidth: true
+            Layout.topMargin: 2
+            bridge: root.chatBridge
+            theme: root
+        }
+
         TranscriptView {
             Layout.fillWidth: true
             Layout.fillHeight: true
