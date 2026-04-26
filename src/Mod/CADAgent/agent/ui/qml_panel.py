@@ -644,6 +644,7 @@ class QmlChatBridge(QtCore.QObject):
     attachmentsChanged = QtCore.Signal()
     todosChanged = QtCore.Signal()
     activeDocChanged = QtCore.Signal(str)
+    contextChanged = QtCore.Signal()
 
     def __init__(self, model: MessagesModel, parent=None):
         super().__init__(parent)
@@ -660,6 +661,11 @@ class QmlChatBridge(QtCore.QObject):
         self._pending_edit: dict[str, Any] = {}  # concurrent.futures.Future
         self._attachments: list[dict[str, str]] = []  # [{"path","name"}, ...]
         self._todos: list[dict] = []
+        # Auto-compaction surface — driven by runtime ``contextUsage`` /
+        # ``compactingChanged`` signals; consumed by the topbar progress strip.
+        self._context_used: int = 0
+        self._context_limit: int = 256_000
+        self._context_compacting: bool = False
 
     def bind(self, panel: "QmlChatPanel", runtime) -> None:
         self._panel = panel
@@ -771,6 +777,57 @@ class QmlChatBridge(QtCore.QObject):
             return
         self._todos = new
         self.todosChanged.emit()
+
+    # --- Context / auto-compaction surface ---------------------------
+
+    @QtCore.Property(int, notify=contextChanged)
+    def contextUsed(self) -> int:
+        return int(self._context_used)
+
+    @QtCore.Property(int, notify=contextChanged)
+    def contextLimit(self) -> int:
+        return int(self._context_limit)
+
+    @QtCore.Property(float, notify=contextChanged)
+    def contextUsedPct(self) -> float:
+        limit = self._context_limit if self._context_limit > 0 else 1
+        pct = float(self._context_used) / float(limit)
+        if pct < 0.0:
+            return 0.0
+        if pct > 1.0:
+            return 1.0
+        return pct
+
+    @QtCore.Property(bool, notify=contextChanged)
+    def contextCompacting(self) -> bool:
+        return bool(self._context_compacting)
+
+    @QtCore.Slot(int, int)
+    def _on_context_usage(self, used: int, limit: int) -> None:
+        used_i = int(used or 0)
+        limit_i = int(limit or 0) or self._context_limit or 256_000
+        if used_i == self._context_used and limit_i == self._context_limit:
+            return
+        self._context_used = used_i
+        self._context_limit = limit_i
+        self.contextChanged.emit()
+
+    @QtCore.Slot(bool)
+    def _on_compacting_changed(self, flag: bool) -> None:
+        flag_b = bool(flag)
+        if flag_b == self._context_compacting:
+            return
+        self._context_compacting = flag_b
+        self.contextChanged.emit()
+
+    @QtCore.Slot()
+    def compactNow(self) -> None:
+        if self._runtime is None:
+            return
+        try:
+            self._runtime.request_compaction("manual")
+        except Exception as exc:
+            self._model.add_error(str(exc))
 
     # --- Slots (QML → Python) ----------------------------------------
 
@@ -922,56 +979,22 @@ class QmlChatBridge(QtCore.QObject):
         return False
 
     def _run_local_compaction(self) -> None:
-        """Collapse rows older than the last ~30 into a single CompactionRow.
+        """Trigger a real LLM-backed compaction via the runtime.
 
-        This is a local, no-LLM compaction: the model's own context is handled
-        by the SDK's session resume; this surface just keeps the transcript
-        scrollable once it grows past a few hundred rows.
+        Wave-2: the local row-collapsing fallback was replaced by a runtime-
+        side ``request_compaction`` that summarises the transcript, forks the
+        session, and resets the token accumulator. Slash-command dispatch
+        (``/compact``) still calls this method by name.
         """
-        rows = self._model._rows
-        cutoff = len(rows) - 30
-        if cutoff <= 3:
+        if self._runtime is None:
             self._model.add_system(
-                translate("CADAgent", "Nothing to compact yet.")
+                translate("CADAgent", "Agent runtime not ready.")
             )
             return
-        # Preserve the tail; replace the head with a single compaction row.
-        head = rows[:cutoff]
-        tail = rows[cutoff:]
-        self._model.beginResetModel()
-        self._model._rows = []
-        # Rebuild indices from scratch; the tail rows keep their original
-        # rowIds and meta, so in-flight tool/perm rows still resolve.
-        self._model._open_assistant = None
-        self._model._open_thinking = None
-        self._model._tool_index.clear()
-        self._model._perm_index.clear()
-        self._model._milestone_index.clear()
-        self._model._row_by_id.clear()
-        self._model._todos_row = None
-        self._model._current_agent = None
-        # Compaction summary row first.
-        summary_row = {
-            "kind": "compaction",
-            "text": "",
-            "meta": {
-                "tokensBefore": None,
-                "tokensAfter": None,
-                "archivePath": "",
-                "summary": translate(
-                    "CADAgent", "{0} earlier rows collapsed."
-                ).format(len(head)),
-            },
-            "rowId": self._model._alloc_row_id(),
-        }
-        self._model._rows.append(summary_row)
-        self._model._row_by_id[summary_row["rowId"]] = 0
-        # Re-append tail.
-        for row in tail:
-            self._model._rows.append(row)
-            self._model._row_by_id[row.get("rowId", "")] = len(self._model._rows) - 1
-        self._model.endResetModel()
-        self.scrollToEnd.emit()
+        try:
+            self._runtime.request_compaction("manual")
+        except Exception as exc:
+            self._model.add_error(str(exc))
 
     @QtCore.Slot()
     def stop(self) -> None:

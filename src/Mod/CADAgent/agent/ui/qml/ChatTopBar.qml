@@ -48,6 +48,45 @@ RowLayout {
 
     Item { Layout.fillWidth: true }
 
+    Text {
+        id: contextLabel
+        readonly property real pct: bridge ? bridge.contextUsedPct : 0.0
+        visible: bridge && (bridge.contextCompacting || pct > 0.5)
+        text: bridge && bridge.contextCompacting
+            ? qsTr("Compacting…")
+            : qsTr("%1% until auto-compact").arg(
+                Math.max(0, Math.round((1.0 - pct) * 100)))
+        font.italic: bridge && bridge.contextCompacting
+        color: fgDim
+        font.pixelSize: 10
+        font.family: monoFamily
+        Layout.maximumWidth: 180
+        elide: Text.ElideRight
+    }
+
+    Rectangle {
+        id: contextStrip
+        readonly property real pct: bridge ? bridge.contextUsedPct : 0.0
+        height: 3
+        width: parent ? parent.width * pct : 0
+        anchors.bottom: parent ? parent.bottom : undefined
+        anchors.left: parent ? parent.left : undefined
+        z: 5
+        color: pct >= 0.95
+            ? "#d44a3a"
+            : (pct >= 0.80 ? "#d49b1c" : (theme ? theme.accent : "#3a8fd4"))
+        visible: pct > 0.0
+
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            hoverEnabled: true
+            ToolTip.visible: containsMouse
+            ToolTip.text: qsTr("Compact context now")
+            onClicked: { if (bridge) bridge.compactNow() }
+        }
+    }
+
     ToolButton {
         id: hooksIndicator
         property string source: "none"
