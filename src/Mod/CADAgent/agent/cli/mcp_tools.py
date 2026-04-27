@@ -116,6 +116,37 @@ async def inspect(args):
 
 
 @tool(
+    "verify_spec",
+    "Run every parameter's `verify` query through the worker and return a structured "
+    "PASS/FAIL table. This is the same gate the harness runs at Stop — call it before "
+    "declaring done so you can fix any FAIL rows BEFORE the harness blocks your stop. "
+    "Inch→mm conversion is automatic; the table shows the mm-native query that ran.",
+    _schema(),
+    annotations=_READ_ONLY,
+)
+async def verify_spec(args):
+    try:
+        from . import verify_gate
+        doc = _handle(args)
+        client = await get_shared()
+        await _ensure_open(client, doc.FileName, reload=True)
+        rows = await verify_gate.run_gate(client, doc.FileName)
+        rows.extend(verify_gate.coverage_rows(doc.FileName))
+        failed = verify_gate.fails(rows)
+        return _ok({
+            "rows": rows,
+            "passed": len(rows) - len(failed),
+            "failed": len(failed),
+            "all_pass": len(failed) == 0,
+            "table": verify_gate.format_table(rows),
+        })
+    except WorkerError as exc:
+        return _err(f"worker: {exc}")
+    except Exception as exc:
+        return _err(str(exc))
+
+
+@tool(
     "doc_reload",
     "Force the worker to re-read the active .FCStd from disk. Call after a Bash script that touched the file if you "
     "haven't already passed reload=true to inspect.",
@@ -391,6 +422,7 @@ async def exit_plan_mode(args):
 
 TOOL_FUNCS = [
     inspect,
+    verify_spec,
     doc_reload,
     memory_read,
     memory_note_write,

@@ -407,13 +407,33 @@ def _kind_slots(doc: Any, target: str | None, opts: dict[str, str]) -> dict[str,
 
 
 def _kind_fillets(doc: Any, target: str | None, opts: dict[str, str]) -> dict[str, Any]:
-    """Fillet = toroidal face. Radius = MinorRadius."""
+    """Fillet = toroidal face on a real body, *not* a free-standing torus
+    primitive. Radius = MinorRadius.
+
+    Provenance heuristic: real fillets always border at least one
+    non-toroidal face (the surfaces being filleted). A standalone torus
+    primitive has only toroidal faces. Without this, agents can game a
+    ``count_small_rounds=32 verify="fillets radius=2.286"`` check by
+    spawning 32 disconnected torus markers — the count passes but the
+    geometry is meaningless.
+    """
     radius = _opt_float(opts, "radius")
     tol = _tol(opts, 0.5)
     found: list[dict[str, Any]] = []
     for _, shape in _shapes(doc, target):
+        # If every face on this shape is a torus, it's a primitive
+        # marker — skip even if a target was specified, the agent
+        # shouldn't be able to ask "fillets of <decoy>" and pass either.
+        face_kinds = {_surface_kind(f) for f in shape.Faces}
+        if face_kinds and face_kinds == {"Torus"}:
+            continue
         for face in shape.Faces:
             if _surface_kind(face) != "Torus":
+                continue
+            # A real fillet borders other surface types. If this torus
+            # face has no non-torus neighbor along its edges, treat it
+            # as a primitive face on a decoy body and skip.
+            if not _has_non_torus_neighbor(shape, face):
                 continue
             surf = face.Surface
             r_minor = float(getattr(surf, "MinorRadius", 0.0))
@@ -430,6 +450,29 @@ def _kind_fillets(doc: Any, target: str | None, opts: dict[str, str]) -> dict[st
                 "center": center,
             })
     return {"count": len(found), "items": found}
+
+
+def _has_non_torus_neighbor(shape: Any, face: Any) -> bool:
+    """True iff ``face`` shares at least one edge with a non-torus face
+    on the same shape. Real fillets always do; a toroidal primitive's
+    faces only border other toroidal faces (or none, for a single
+    closed torus)."""
+    try:
+        face_edges = {e.hashCode() for e in face.Edges}
+    except Exception:
+        return False
+    for other in shape.Faces:
+        if other is face:
+            continue
+        if _surface_kind(other) == "Torus":
+            continue
+        try:
+            for e in other.Edges:
+                if e.hashCode() in face_edges:
+                    return True
+        except Exception:
+            continue
+    return False
 
 
 def _kind_spheres(doc: Any, target: str | None, opts: dict[str, str]) -> dict[str, Any]:

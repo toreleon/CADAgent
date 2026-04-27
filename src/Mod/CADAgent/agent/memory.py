@@ -254,9 +254,17 @@ def set_parameter(
 ) -> dict:
     data = load(doc)
     params = data.setdefault("parameters", {})
-    spec: dict = {"value": float(value), "unit": unit or "mm", "note": note or ""}
+    u = (unit or "mm").strip()
+    spec: dict = {"value": float(value), "unit": u, "note": note or ""}
     if verify:
-        spec["verify"] = str(verify)
+        # Inspect is mm-native. If the param is in inches, rewrite the
+        # verify DSL's dimensional values to mm at storage time so we
+        # never feed inches into inspect.query downstream. The rewriter
+        # uses ``value`` to disambiguate: if the query's numeric matches
+        # the inch value, convert it; if it's already mm-magnitude, leave
+        # alone — prevents 50.8 → 1290.32 double-conversions.
+        from .cli.verify_gate import rewrite_verify_for_unit
+        spec["verify"] = rewrite_verify_for_unit(str(verify), u, float(value))
     params[name] = spec
     save(doc, data)
     return params[name]

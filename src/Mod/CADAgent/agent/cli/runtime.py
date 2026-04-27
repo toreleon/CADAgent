@@ -47,6 +47,7 @@ from .. import memory as project_memory
 from ..prompts_cli import CAD_SYSTEM_PROMPT
 from ..worker.client import WorkerError, close_shared, get_shared
 from . import mcp_tools
+from . import verify_gate
 from .doc_handle import DocHandle
 from .subagents import build_agents
 
@@ -343,6 +344,91 @@ async def _post_bash_probe(input_data, tool_use_id, context):  # noqa: ANN001 �
     }
 
 
+# ---------------------------------------------------------------------------
+# Stop-gate: harness-level enforcement of the spec contract.
+#
+# The model used to omit features ("simplified for robustness"), claim PASS,
+# and exit. Prose can describe the gate; only code can refuse the stop.
+# This hook fires when the SDK reports the agent is about to stop. We run
+# every parameter's verify query through the worker, and if any fail, we
+# return decision="block" with the failed rows in the reason — the SDK
+# routes that back as a tool result and the model gets another turn.
+#
+# Cap at 3 stop-blocks per session so we don't loop indefinitely on a
+# verify query the geometry can never satisfy (detector limitation, bad
+# verify string, etc.) — on the 3rd attempt we let the stop through with
+# the failures persisted to the sidecar so the user sees them.
+# ---------------------------------------------------------------------------
+
+_GATE_ATTEMPTS_CAP = 3
+_gate_attempts: dict[str, int] = {}
+
+
+async def _stop_gate(input_data, tool_use_id, context):  # noqa: ANN001 — SDK callback signature
+    path = _active_doc_path()
+    if not path or not os.path.exists(path):
+        return {}
+    sys.stderr.write(f"[stop-gate] firing on {path}\n")
+    try:
+        client = await get_shared()
+        await client.call("doc.open", path=path)
+        await client.call("doc.reload")
+        rows = await verify_gate.run_gate(client, path)
+        rows.extend(verify_gate.coverage_rows(path))
+    except Exception as exc:
+        # Worker dead / sidecar broken — let the stop through; surface the
+        # symptom in additionalContext so the user sees it.
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "Stop",
+                "additionalContext": f"[stop-gate] error: {type(exc).__name__}: {exc}",
+            }
+        }
+
+    failed = verify_gate.fails(rows)
+    attempts = _gate_attempts.get(path, 0)
+
+    # Persist the table so the user can audit it after the run.
+    try:
+        project_memory.write_note(
+            DocHandle(path), "open_questions", "completeness_gate",
+            verify_gate.format_table(rows) + f"\n\n(attempt {attempts + 1}/{_GATE_ATTEMPTS_CAP})",
+        )
+    except Exception as exc:
+        sys.stderr.write(f"[stop-gate] persist error: {type(exc).__name__}: {exc}\n")
+
+    if not failed:
+        return {}  # all PASS — let the stop through
+
+    if attempts >= _GATE_ATTEMPTS_CAP:
+        # Cap hit — let the stop through but tell the model to surface
+        # the still-failing rows in its summary.
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "Stop",
+                "additionalContext": (
+                    f"[stop-gate] cap reached ({attempts}/{_GATE_ATTEMPTS_CAP}); "
+                    f"{len(failed)} row(s) still FAIL — list them prominently in your final summary, "
+                    "do NOT call them 'simplified'.\n"
+                    + verify_gate.format_table(rows)
+                ),
+            }
+        }
+
+    _gate_attempts[path] = attempts + 1
+    table = verify_gate.format_table(rows)
+    fails_brief = ", ".join(f"{r['name']} ({r['detail']})" for r in failed)
+    reason = (
+        f"Stop blocked by completeness gate (attempt {attempts + 1}/{_GATE_ATTEMPTS_CAP}). "
+        f"{len(failed)} verify row(s) FAIL: {fails_brief}. "
+        "Emit a Bash that rebuilds the missing/wrong feature(s) — clean up the prior attempt's "
+        "named features first (doc.removeObject) so the geometry doesn't double up. "
+        "Then verify_spec / inspect again before declaring done.\n\n"
+        + table
+    )
+    return {"decision": "block", "reason": reason}
+
+
 def build_options(
     *,
     extra_tools: list | None = None,
@@ -392,6 +478,7 @@ def build_options(
         include_partial_messages=True,
         hooks={
             "PostToolUse": [HookMatcher(matcher="Bash", hooks=[_post_bash_probe])],
+            "Stop": [HookMatcher(hooks=[_stop_gate])],
         },
         **_thinking_kwargs(),
     )
@@ -530,11 +617,44 @@ async def _drive(prompt: str, images: list[str] | None = None) -> int:
                 stream.result(msg)
 
     stream.close_streams()
+
+    # Defensive final gate: the SDK's Stop hook only fires when the
+    # model issues a clean "I'm done" termination. If the stream ended
+    # for any other reason (token cap, model-side hang, an SDK quirk),
+    # the gate hasn't run. Run it here unconditionally so the wrapper
+    # CLI's exit status reflects spec coverage, not just whether the
+    # subprocess exited cleanly.
+    exit_code = 0
+    try:
+        path = _active_doc_path()
+        if path and os.path.exists(path):
+            client = await get_shared()
+            await client.call("doc.open", path=path)
+            await client.call("doc.reload")
+            rows = await verify_gate.run_gate(client, path)
+            rows.extend(verify_gate.coverage_rows(path))
+            failed = verify_gate.fails(rows)
+            try:
+                project_memory.write_note(
+                    DocHandle(path), "open_questions", "completeness_gate",
+                    verify_gate.format_table(rows) + "\n\n(final, post-stream)",
+                )
+            except Exception as exc:
+                sys.stderr.write(f"[final-gate] persist error: {type(exc).__name__}: {exc}\n")
+            if failed:
+                sys.stderr.write(
+                    f"[final-gate] {len(failed)} row(s) FAIL — see "
+                    f"{path}'s sidecar open_questions.completeness_gate\n"
+                )
+                exit_code = 3  # distinguishes "ran but failed gate" from clean exit
+    except Exception as exc:
+        sys.stderr.write(f"[final-gate] error: {type(exc).__name__}: {exc}\n")
+
     try:
         await close_shared()
     except Exception:
         pass
-    return 0
+    return exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
