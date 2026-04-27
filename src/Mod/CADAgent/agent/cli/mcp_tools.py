@@ -22,6 +22,7 @@ from claude_agent_sdk import tool
 from mcp.types import ToolAnnotations
 
 from .. import memory as project_memory
+from ..worker.client import WorkerClient, WorkerError, get_shared
 from .doc_handle import DocHandle
 
 
@@ -61,6 +62,75 @@ def _schema(**properties) -> dict:
         if rq:
             required.append(name)
     return {"type": "object", "properties": props, "required": required}
+
+
+# ---------------------------------------------------------------------------
+# worker-backed inspection
+# ---------------------------------------------------------------------------
+#
+# A long-lived FreeCADCmd subprocess (``WorkerClient``) holds the active doc
+# in memory. The headless runtime starts it at session entry; tools below
+# borrow it through the module-level singleton in :mod:`agent.worker.client`.
+# The doc path is threaded through every call so we can reload-on-mismatch
+# transparently — agents shouldn't have to think about worker state.
+
+_worker_open_doc: str | None = None  # tracks last-opened path so we skip redundant opens
+
+
+async def _ensure_open(client: WorkerClient, path: str, *, reload: bool = False) -> None:
+    """Make ``path`` the worker's current doc, reloading if requested."""
+    global _worker_open_doc
+    if reload or _worker_open_doc != path:
+        await client.call("doc.open", path=path)
+        _worker_open_doc = path
+
+
+@tool(
+    "inspect",
+    "Run a structured geometry query against the active .FCStd. Cheap (sub-100ms): the worker holds the doc in memory. "
+    "Query DSL: 'bbox' | 'bbox of NAME' | 'face_types' | 'face_types of NAME' | "
+    "'holes diameter=15 [axis=z] [tol=0.5]' | 'bosses diameter=30' | "
+    "'slots width=8 length=20' | 'fillets radius=10' | 'spheres radius=250' | "
+    "'solids' | 'section z=35' | 'mass [of NAME]'. "
+    "Pass reload=true after a Bash script that mutated the .FCStd.",
+    _schema(
+        query={"type": "string", "required": True},
+        reload={"type": "boolean"},
+    ),
+    annotations=_READ_ONLY,
+)
+async def inspect(args):
+    try:
+        doc = _handle(args)
+        query = args.get("query")
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query is required")
+        client = await get_shared()
+        await _ensure_open(client, doc.FileName, reload=bool(args.get("reload")))
+        result = await client.call("inspect.query", query=query)
+        return _ok(result)
+    except WorkerError as exc:
+        return _err(f"worker: {exc}")
+    except Exception as exc:
+        return _err(str(exc))
+
+
+@tool(
+    "doc_reload",
+    "Force the worker to re-read the active .FCStd from disk. Call after a Bash script that touched the file if you "
+    "haven't already passed reload=true to inspect.",
+    _schema(),
+)
+async def doc_reload(args):
+    try:
+        doc = _handle(args)
+        client = await get_shared()
+        await _ensure_open(client, doc.FileName, reload=True)
+        return _ok({"reloaded": doc.FileName})
+    except WorkerError as exc:
+        return _err(f"worker: {exc}")
+    except Exception as exc:
+        return _err(str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -106,12 +176,16 @@ async def memory_note_write(args):
 
 @tool(
     "memory_parameter_set",
-    "Set a named design parameter (value + unit + optional note) in the sidecar. The agent's FreeCAD scripts may read these to drive geometry.",
+    "Set a named design parameter (value + unit + optional note + optional verify query) in the sidecar. "
+    "If verify is provided (an inspect-DSL query string like 'slots width=8 length=15' or 'spheres radius=250'), "
+    "the auto-probe runs it after every Bash mutation and surfaces any deviation. Use verify on count/dimension "
+    "parameters that define done-ness.",
     _schema(
         name={"type": "string", "required": True},
         value={"type": "number", "required": True},
         unit={"type": "string"},
         note={"type": "string"},
+        verify={"type": "string"},
     ),
 )
 async def memory_parameter_set(args):
@@ -123,6 +197,7 @@ async def memory_parameter_set(args):
             float(args["value"]),
             args.get("unit") or "mm",
             args.get("note") or "",
+            verify=args.get("verify"),
         )
         return _ok({"name": args["name"], **spec})
     except Exception as exc:
@@ -315,6 +390,8 @@ async def exit_plan_mode(args):
 
 
 TOOL_FUNCS = [
+    inspect,
+    doc_reload,
     memory_read,
     memory_note_write,
     memory_parameter_set,

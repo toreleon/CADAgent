@@ -244,10 +244,20 @@ def update(doc, patch: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def set_parameter(doc, name: str, value: float, unit: str = "mm", note: str = "") -> dict:
+def set_parameter(
+    doc,
+    name: str,
+    value: float,
+    unit: str = "mm",
+    note: str = "",
+    verify: str | None = None,
+) -> dict:
     data = load(doc)
     params = data.setdefault("parameters", {})
-    params[name] = {"value": float(value), "unit": unit or "mm", "note": note or ""}
+    spec: dict = {"value": float(value), "unit": unit or "mm", "note": note or ""}
+    if verify:
+        spec["verify"] = str(verify)
+    params[name] = spec
     save(doc, data)
     return params[name]
 

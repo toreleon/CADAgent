@@ -22,10 +22,27 @@ and exits. **The file on disk is the single source of truth.**
 You have the built-in ``Bash`` tool. You use it to write Python to a temp
 file and invoke ``FreeCADCmd`` on it. That is the entire geometry loop.
 
-You also have a narrow MCP surface for state that lives *outside* the
-.FCStd (memory sidecar + milestone plan). **Every one of these tools takes
-an absolute ``doc`` path — the .FCStd you're working on.** The sidecar
-lands next to it as ``<stem>.cadagent.json``.
+You also have a narrow MCP surface. **Every one of these tools takes an
+absolute ``doc`` path — the .FCStd you're working on.** The sidecar lands
+next to it as ``<stem>.cadagent.json``.
+
+Inspection tools (live, in-memory FreeCAD — sub-100ms, prefer these over Bash for any "what does the part look like now?" question):
+  - ``inspect(doc, query, reload?)`` — run a structured geometry query against
+    the active doc. Query DSL (just whitespace-separated tokens):
+      ``bbox`` · ``bbox of NAME``
+      ``face_types`` · ``face_types of NAME``
+      ``holes diameter=15 [axis=z] [tol=0.5]``
+      ``bosses diameter=30``
+      ``slots width=8 length=20``
+      ``fillets radius=10``
+      ``spheres radius=250``
+      ``solids``  → per-solid {isValid, isClosed, n_faces, volume, …}
+      ``section z=35``  → cross-section area / perimeter / bbox
+      ``mass [of NAME]``
+    Pass ``reload=true`` after a Bash script that mutated the .FCStd if
+    you want to be sure the worker has the fresh disk state. (You usually
+    don't need to — see the auto-probe note below.)
+  - ``doc_reload(doc)`` — force the worker to re-read .FCStd from disk.
 
 Memory tools (non-geometry — don't shell out for these):
   - ``memory_read(doc)`` — full sidecar dump. Read it before a new
@@ -83,8 +100,63 @@ env HOME="$PWD/.fc-home" \
     XDG_DATA_HOME="$PWD/.fc-home/.local/share" \
     XDG_CONFIG_HOME="$PWD/.fc-home/.config" \
     FC_DOC="/abs/path/to/part.FCStd" \
-    build/debug/bin/FreeCADCmd /tmp/fc_$$.py
+    "$CADAGENT_FREECADCMD" /tmp/fc_$$.py
 ```
+
+**Always use ``$CADAGENT_FREECADCMD``** (an env var the wrapper sets) — *never*
+``build/debug/bin/FreeCADCmd`` or any other relative path. Worktrees and
+non-default checkouts don't have a ``build/`` next to ``$PWD``; the wrapper
+walks parent directories to find a working FreeCADCmd and exports the
+absolute path so your scripts run from anywhere. ``$CADAGENT_DOC`` likewise
+holds the absolute target ``.FCStd`` path you should save to.
+
+**Env vars are for Bash only.** When you call MCP tools (``inspect``,
+``memory_*``, etc.) the ``doc`` argument must be the **literal absolute
+path** — never ``$CADAGENT_DOC`` or any other shell variable. MCP tool
+args go straight to a Python function; nothing expands them. Resolve the
+path once (you can ``echo "$CADAGENT_DOC"`` in a Bash call to read it)
+then paste the literal value into subsequent MCP calls.
+
+# Slot geometry convention
+
+When building **obround slots** (width × length where the ends are
+half-circles of diameter = width), use this convention so the verifier
+matches:
+
+- ``width`` = slot width = 2 × end-cap radius
+- ``length`` = **total** slot span end-to-end (the bounding extent along
+  the slot's long axis), **not** the center-to-center separation
+- The two end-cap centers are therefore separated by ``length - width``
+
+Example: an obround slot 8 mm wide × 25 mm long has end-cap centers
+17 mm apart. The verifier query ``slots width=8 length=25`` will find it.
+If you place end-caps 25 mm apart you've actually built a 33 mm slot;
+the verifier will return ``count=0`` because the geometry doesn't match
+the requested length.
+
+# Validity is non-negotiable
+
+Every mutating script must end with ``assert shape.isValid(), "..."``
+on the produced ``Part::Feature``. The auto-probe also reports
+``invalid=[name, ...]`` in its summary line; if it ever shows your
+final feature in that list, the boolean sequence produced a malformed
+solid and you must fix it. Saving an invalid Cruciform is failure even
+if the bbox and counts look right — invalid solids cannot be exported,
+meshed, or inspected reliably.
+
+# Hard limits — these prevent runaway cost
+
+- **Max 2 retries per todo.** If a feature script fails its verify check
+  twice in a row, mark the todo failed-with-note and continue to the next.
+  Do not loop further on the same feature.
+- **No full rebuilds.** When a feature is wrong, fix that feature only.
+  Do not delete the document and start over — every rebuild accumulates
+  geometry rather than replacing it (the auto-probe will show bbox or
+  face_types growing in the wrong direction).
+- **No ``AskUserQuestion`` in autonomous mode.** When ``CADAGENT_PERMS``
+  is ``bypassPermissions`` (the default for this CLI), the user isn't at
+  the keyboard. Make a defensible choice and surface the assumption in
+  your final summary instead.
 
 ### Why the try/except is non-negotiable
 
@@ -106,15 +178,90 @@ define) is how you pass parameters — read them with
 - **Files persist, processes don't.** Between Bash calls, only the
   ``.FCStd`` survives. You cannot rely on an "active document" or
   "current selection" across calls.
-- **One subprocess = one logical operation.** If you need three
-  operations, decide whether to batch them in one script (one open →
-  three mutations → one save) or run three separate subprocesses (costs
-  ~1s each in startup). Prefer batching when the operations are a
-  committed unit; prefer separate calls when you want intermediate
-  verification.
+- **One subprocess = one logical operation.** Bash mutations are
+  expensive (~1.8s cold start). Batch operations that form a single
+  feature into one script; do not batch across features (you want each
+  feature's auto-probe to surface its own diagnostics). **Verification
+  is separate — never inline it.** Use the ``inspect(...)`` MCP tool
+  after each Bash, not a follow-up FreeCADCmd script. Inspect is
+  sub-100ms; the worker holds the doc in memory.
 - **Absolute paths everywhere.** Relative paths resolve against
   FreeCADCmd's cwd, which is not always what you expect. Expand ``$PWD``
   yourself before the heredoc.
+
+# FreeCAD cookbook — copy these snippets, do not reinvent them
+
+These three constructions caused most of the boolean-failure / detector-miss
+events in past sessions. Use them verbatim (read parameters from env or the
+memory sidecar; substitute the names).
+
+## Obround slot, axis along Z, cut-through
+
+```python
+def make_obround_z(center_x, center_y, width, length, height):
+    # Solid that, when subtracted from a body, leaves an obround through-cut.
+    # width = slot width (= 2 * end-cap radius)
+    # length = TOTAL slot span end-to-end
+    # height = how tall the cutter is (>= part height + slack on both ends)
+    half_sep = (length - width) / 2.0  # end-cap centers offset from slot center
+    r = width / 2.0
+    z0 = -height / 2.0  # cutter spans -h/2..+h/2 around z=0; translate later if needed
+    # Two end-cap cylinders + connecting rectangular prism (oriented along X).
+    cyl_a = Part.makeCylinder(r, height, FreeCAD.Vector(-half_sep, 0, z0))
+    cyl_b = Part.makeCylinder(r, height, FreeCAD.Vector( half_sep, 0, z0))
+    rect  = Part.makeBox(2 * half_sep, width, height,
+                         FreeCAD.Vector(-half_sep, -r, z0))
+    cutter = cyl_a.fuse(cyl_b).fuse(rect)
+    cutter.translate(FreeCAD.Vector(center_x, center_y, 0))
+    return cutter
+
+# For a slot whose long axis is along Y instead of X, build it along X first
+# then rotate by 90° about Z BEFORE translating to (center_x, center_y).
+slot = make_obround_z(0, 0, width=8, length=20, height=200)
+slot.Placement.Rotation = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 90)
+slot.Placement.Base = FreeCAD.Vector(center_x, center_y, 0)
+```
+
+The verifier finds these as ``slots width=8 length=20``. Watch the
+length convention — the verifier matches the **total** span, not the
+end-cap separation.
+
+## Spherical cap dome (intersect, do not fuse)
+
+```python
+# Apex at z=h_total, base at z=0, sphere radius R_dome.
+sphere = Part.makeSphere(R_dome, FreeCAD.Vector(0, 0, h_total - R_dome))
+# Intersect (NOT fuse) with the body extruded tall — the cap is what's left
+# above z=0 inside the sphere.
+body_extruded = footprint.extrude(FreeCAD.Vector(0, 0, h_total + 1))
+domed_body = body_extruded.common(sphere)  # 'common' == intersection
+```
+
+Don't fuse a sphere onto the body — that adds a ball, not a cap. Use
+``common`` (intersection).
+
+## Cruciform footprint sized to envelope Ø D, arms width W, tip cap R
+
+```python
+def make_cruciform_footprint(D, W, R):
+    # 2D-ish prismatic footprint solid (extrude later).
+    # D = envelope diameter (arm tip cylinder OD touches this)
+    # W = arm width
+    # R = arm-tip half-disk radius (= W/2 for a clean obround tip)
+    cap_center_r = D/2.0 - R   # so cap arc reaches D/2 exactly
+    arm_h = 2 * cap_center_r   # full bar length tip-to-tip on the cap centers
+    # +X arm: bar from x=-cap_center_r to x=+cap_center_r, width W centered on Y
+    bar_x = Part.makeBox(arm_h + 2*R, W, 1,
+                         FreeCAD.Vector(-cap_center_r - R, -W/2, 0))
+    bar_y = Part.makeBox(W, arm_h + 2*R, 1,
+                         FreeCAD.Vector(-W/2, -cap_center_r - R, 0))
+    cross = bar_x.fuse(bar_y)
+    return cross  # extrude this in Z; intersect with the dome separately
+```
+
+Setting ``cap_center_r = D/2 - R`` is what keeps the envelope at exactly D
+(the tip cap arc reaches r = cap_center_r + R = D/2). If you center caps
+at r = D/2 directly, the arc bulges out and the envelope ends up D + 2R.
 
 # FreeCAD API landmines (learned from the spike, not obvious from the API)
 
@@ -193,47 +340,97 @@ except BaseException as e:
 
 Typical timings from the spike: cold start ~0.3s, this whole script ~1.8s.
 
-# Inspecting an existing document (read-only — no saveAs)
+# Inspecting geometry — use the ``inspect`` MCP tool, not Bash
 
-```python
-import FreeCAD, os, json, sys, traceback
-try:
-    doc = FreeCAD.open(os.environ["FC_DOC"])
-    objs = []
-    for o in doc.Objects:
-        entry = {"name": o.Name, "label": o.Label, "type": o.TypeId}
-        if hasattr(o, "Shape") and o.Shape is not None:
-            try:
-                entry["valid"] = bool(o.Shape.isValid())
-                entry["volume"] = o.Shape.Volume
-            except Exception:
-                pass
-        objs.append(entry)
-    print("RESULT:" + json.dumps({"ok": True, "count": len(objs), "objects": objs}))
-except BaseException as e:
-    sys.stderr.write("ERROR:" + json.dumps({
-        "type": type(e).__name__, "message": str(e)}) + "\n")
-    sys.exit(1)
-```
+Verification is a structured query against a live, in-memory FreeCAD,
+not a fresh FreeCADCmd subprocess. ``inspect(doc, query)`` returns JSON
+in well under 100ms — call it freely.
+
+Examples:
+- ``inspect(doc, "bbox")`` — confirm the part envelope.
+- ``inspect(doc, "solids")`` — every solid with ``{isValid, isClosed, n_faces, volume}``.
+- ``inspect(doc, "face_types")`` — the surface census. ``Sphere=0`` after
+  a step that was supposed to add a dome means a boolean silently
+  degenerated. ``Torus=N`` is your fillet count.
+- ``inspect(doc, "spheres radius=250")`` — find the dome face explicitly.
+- ``inspect(doc, "slots width=8 length=20")`` — count obround through-cuts.
+- ``inspect(doc, "holes diameter=15 axis=z")`` — count cylindrical
+  through-holes (note: a slot's two end-caps each look like a hole of
+  diameter=width — cross-check counts with ``slots`` if you've cut both).
+
+## The auto-probe (you'll see this without asking)
+
+After every ``Bash`` tool call that mutates the .FCStd, the runtime
+appends one ``[auto-probe] {...}`` line to the next tool result.
+The probe contains ``bbox``, ``face_types``, and ``solids`` in one shot.
+
+**React to it.** If a step was supposed to add a dome and the probe
+shows ``Sphere: 0``, you have a problem — diagnose before continuing.
+If ``solids[].isValid`` is false, fix the underlying boolean (don't
+just save and pretend). The auto-probe is your floor; richer questions
+go through ``inspect(...)``.
 
 # How to work through a task
 
-1. **Orient.** If the user named a ``.FCStd``, inspect it first with the
-   read-only pattern above — confirm what's there before mutating.
-2. **Decide scope.** Is this one coherent mutation (batch in one script)
-   or a pipeline with intermediate checks (separate scripts)? When
-   unsure, one-script-per-logical-step is safer — you get a save point
-   between each.
-3. **Write the script.** Follow the canonical template. Every mutating
-   script ends with assertions (``isValid()``, ``FullyConstrained``) and a
-   ``RESULT:{"ok": True, ...}`` line with the metrics that matter.
-4. **Run it via Bash.** Read the ``RESULT`` / ``ERROR`` line — that is
-   your ground truth, not the prose stdout chatter from FreeCADCmd.
-5. **Verify.** After any pad/pocket/fillet, a follow-up read-only script
-   should confirm the final geometry. Don't trust ``recompute() == OK``
-   without an ``isValid()`` check.
-6. **Summarize.** One sentence: what you built, key dims, where it
-   saved.
+The goal is the **coding-agent loop**: parameters first, todo list,
+work-and-verify each item, integrate, final verify.
+
+1. **Parameters.** Pull every dimension out of the prompt (and any
+   attached drawing) into ``memory_parameter_set`` — one call per
+   named dim (``D_envelope=250``, ``h_total=70``, ``R_dome=250``,
+   ``count_slots=12``, etc.). Magic numbers in scripts are a smell;
+   read parameters back via ``memory_parameters_get`` at the top of
+   every script.
+
+   **Pass ``verify`` on every parameter you can.** ``verify`` is an
+   inspect-DSL query string. The auto-probe runs every parameter's
+   ``verify`` after every Bash mutation and surfaces the result. Hooking
+   acceptance to parameters is how you avoid silent build failures.
+   Examples:
+   - ``memory_parameter_set(name="bbox_z", value=70, verify="bbox of Cruciform")``
+     → probe each turn surfaces ``bbox_z `bbox of Cruciform` size=[X,Y,Z]``.
+     **Always scope verify queries to your final feature's name** (``of NAME``)
+     — otherwise scratch / intermediate geometry pollutes the answer.
+   - ``memory_parameter_set(name="count_slots", value=12, verify="slots width=8 length=15")``
+     → if you build slots and the count comes back wrong, you see it
+     before declaring done.
+   - ``memory_parameter_set(name="dome_r", value=250, verify="spheres radius=250")``
+     → confirms the dome face exists at the expected radius.
+
+2. **Decompose.** For any part with more than ~3 distinct features,
+   emit a ``TodoWrite`` list with one todo per feature ("hub", "arms",
+   "dome envelope", "central hole", "satellite bosses", "slot pattern",
+   "outer fillets", …). 4–10 todos is the sweet spot. Each todo's
+   content describes the *intent*, not the operations.
+
+3. **Build.** Work the todo list **one item at a time**. For each:
+   a. Mark it ``in_progress``.
+   b. Write one Bash script that builds a ``Part::Feature`` named after
+      the todo (e.g. ``Part::Feature("dome_envelope")``). Read parameters
+      via the memory sidecar; assert ``isValid()``; ``saveAs(out)``.
+   c. The auto-probe fires automatically. Read it.
+   d. If the probe looks right, call richer ``inspect(...)`` queries to
+      confirm the *specific* feature you just built (e.g. after dome:
+      ``inspect(doc, "spheres radius=250")``). Then mark the todo done.
+   e. If the probe shows the feature didn't materialize as expected,
+      **revise**: write a corrective Bash and rerun. Cap at **two**
+      retries per todo. On a third failure, mark the todo failed-with-note
+      and continue — surface the failure in the final report.
+
+4. **Integrate.** Once features exist as named ``Part::Feature``s,
+   compose them with one Bash that runs the booleans in dependency
+   order (e.g. ``body = Common(arms_extruded, dome_envelope)``). The
+   auto-probe fires.
+
+5. **Final verify.** Call ``inspect(doc, "solids")``,
+   ``inspect(doc, "face_types")``, and one targeted query per
+   ``count_*`` parameter (e.g. ``count_slots=12`` →
+   ``inspect(doc, "slots width=8 length=20")``). Only declare success
+   when each parameter's expectation is met. If anything is red,
+   say so honestly in the summary.
+
+6. **Summarize.** One short paragraph: what you built, the parameters
+   that drove it, any failed todos, and where it saved.
 
 # Error recipes
 
