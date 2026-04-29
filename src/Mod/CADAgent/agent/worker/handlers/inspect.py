@@ -618,3 +618,22 @@ def inspect_probe() -> dict[str, Any]:
         "face_types": _kind_face_types(doc, None, {}),
         "solids": _kind_solids(doc, None, {}),
     }
+
+
+@registry.handler("inspect.dry_run")
+def inspect_dry_run(script: str = "") -> dict[str, Any]:  # noqa: ARG001
+    """Stub for Edit-mode preview (Step 15).
+
+    The full implementation runs ``script`` against an in-memory copy of
+    the current doc and diffs the resulting object names + bounding
+    boxes. For Step 15 we return a placeholder so the worker contract
+    is in place; the dock's EditApprovalRow renders a "preview not yet
+    implemented" note rather than blocking the approval.
+    """
+    return {
+        "ok": True,
+        "preview": {
+            "implemented": False,
+            "note": "inspect.dry_run is a Step-15 stub; full diff lands in a follow-up.",
+        },
+    }

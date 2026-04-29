@@ -173,6 +173,13 @@ def make_can_use_tool(
     auto_allow_all = policy.auto_allow_all
     auto_allow_edits = policy.auto_allow_edits
     plan_only = policy.mode is Mode.ASK
+    # Edit mode (Step 15): cap mutating tool calls at 1 per turn. The
+    # counter is closed-over and reset by the runtime via a fresh
+    # make_can_use_tool call on each turn (or per ``editApprovalRequest``
+    # apply; Step 18 wires that). policy.require_preview activates the
+    # cap; default policies (Ask / Agent) leave it off.
+    edit_one_shot = policy.require_preview
+    edit_calls_used = {"n": 0}
 
     async def can_use_tool(tool_name, tool_input, context=None):
         # PreToolUse hook runs first — a user-configured command can block
@@ -255,6 +262,21 @@ def make_can_use_tool(
 
         if tool_name in _SESSION_ALLOWLIST:
             return PermissionResultAllow(updated_input=tool_input)
+
+        # Edit-mode one-shot enforcement: deny any mutating call after the
+        # first. The runtime sees the deny + reason and surfaces it; the
+        # user can re-issue with a follow-up turn (which spins a fresh
+        # make_can_use_tool, resetting the counter).
+        if edit_one_shot and tool_name in MUTATING_TOOLS:
+            if edit_calls_used["n"] >= 1:
+                return PermissionResultDeny(
+                    message=(
+                        "Edit mode allows one mutating tool call per turn. "
+                        "Stop and let the user review; ask again next turn "
+                        "if more changes are needed."
+                    )
+                )
+            edit_calls_used["n"] += 1
 
         cf: concurrent.futures.Future = concurrent.futures.Future()
         if tool_name in MUTATING_TOOLS:
