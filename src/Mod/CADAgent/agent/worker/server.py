@@ -62,7 +62,7 @@ async def handle_line(line: str) -> Response | None:
 
     try:
         result = await registry.dispatch(req.method, req.params)
-    except KeyError:
+    except registry.UnknownMethod:
         return err(req.id, f"unknown method: {req.method}")
     except TypeError as exc:
         return err(req.id, f"bad params for {req.method}: {exc}")

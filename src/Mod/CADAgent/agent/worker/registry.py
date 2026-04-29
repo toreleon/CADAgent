@@ -42,15 +42,23 @@ def clear() -> None:
     _HANDLERS.clear()
 
 
+class UnknownMethod(LookupError):
+    """Raised when ``dispatch`` is asked for a method that isn't registered.
+
+    Distinct from the ``KeyError`` a handler may raise for a missing
+    document/object — the server reports those two cases differently."""
+
+
 async def dispatch(method: str, params: dict[str, Any]) -> Any:
     """Look up ``method`` and invoke it with ``**params``.
 
-    Raises :class:`KeyError` if the method is unknown — the server turns
-    that into a structured error response.
+    Raises :class:`UnknownMethod` if the method is unknown — the server
+    turns that into a structured error response. Handler-raised KeyError
+    propagates as a normal handler error (e.g. "no such object").
     """
     fn = _HANDLERS.get(method)
     if fn is None:
-        raise KeyError(method)
+        raise UnknownMethod(method)
     result = fn(**params)
     if inspect.isawaitable(result):
         result = await result

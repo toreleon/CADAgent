@@ -40,32 +40,30 @@ def rewrite_verify_for_unit(
     param_value: float | None = None,
 ) -> str:
     """Convert inch dim values in the query to mm — but only when we are
-    confident the model wrote inches. Two heuristics:
+    confident the model wrote raw inches.
 
-    1. If ``param_value`` is given and the query's numeric matches it
-       (within rounding), the model wrote the raw inch value — convert.
-    2. Otherwise, fall back to a magnitude check: any value < 10 looks
-       like inches for typical CAD parts (FreeCAD is mm-native, so a
-       50 mm dim shows as 50 not 1.97). Values ≥ 10 are left alone.
-
-    This prevents the double-conversion bug where the model
-    pre-converted to mm (``diameter=50.8``) but the param's unit
-    was still ``in``, and the naive rewrite would do
-    ``50.8 × 25.4 = 1290.32``.
+    Rule: convert only when ``param_value`` is given and the query's
+    numeric matches it (within rounding). Otherwise, leave the query
+    alone — the model is told inspect is mm-native and routinely
+    pre-converts (e.g. ``0.14 in`` → ``diameter=3.556``). A magnitude
+    fallback (``val < 10`` ⇒ inches) flips those small-but-already-mm
+    values into nonsense (3.556 × 25.4 = 90.32).
     ``axis=…``/``tol=…`` are never touched — they are not lengths."""
     if not query or not unit:
         return query
     u = unit.strip().lower()
     if u not in ("in", "inch", "inches", '"'):
         return query
+    if param_value is None:
+        return query
+
+    pv = float(param_value)
 
     def _conv(m: re.Match) -> str:
         key, val = m.group(1), float(m.group(2))
-        if param_value is not None and abs(val - float(param_value)) < 1e-6:
+        if abs(val - pv) < 1e-6:
             return f"{key}={val * 25.4:g}"
-        if val < 10.0:  # looks like an inch value, not a mm-pre-converted one
-            return f"{key}={val * 25.4:g}"
-        return m.group(0)  # already mm — leave alone
+        return m.group(0)  # already mm or unrelated — leave alone
 
     return _DIM_RE.sub(_conv, query)
 
