@@ -134,6 +134,40 @@ def derive_auto_approve(policy: ModePolicy) -> AutoApprove:
 # ---------------------------------------------------------------------------
 
 
+_SUGGEST_VERBS = (
+    "design", "build", "model", "create a full", "refactor", "redesign",
+    "restructure", "multi-part", "assembly", "several", "multiple",
+)
+_SUGGEST_MIN_CHARS = 90
+
+
+def suggest_mode(user_text: str, current: Mode | None = None) -> tuple[Mode, str] | None:
+    """Suggest a mode change based on the user's prompt.
+
+    Returns ``(suggested_mode, reason)`` when the prompt looks like it
+    should shift, or ``None`` when the current mode is fine. Used by
+    Step 14's UX chip ("Looks like a multi-feature build — switch to
+    Ask?"); never auto-flips by itself.
+
+    Heuristic mirrors the legacy ``_should_auto_plan``: long prompts
+    that mention design verbs and list multiple deliverables.
+    """
+    if not user_text or len(user_text) < _SUGGEST_MIN_CHARS:
+        return None
+    lower = user_text.lower()
+    if not any(v in lower for v in _SUGGEST_VERBS):
+        return None
+    multi_signal = lower.count(",") + lower.count(" and ") + lower.count("\n- ") >= 2
+    if not multi_signal:
+        return None
+    if current is Mode.ASK:
+        return None
+    return (
+        Mode.ASK,
+        "complex, multi-feature request — Ask first to plan before building",
+    )
+
+
 def tool_allowlist_for(mode: Mode) -> frozenset[str]:
     """Tools the SDK should expose to the model in this mode.
 
@@ -152,5 +186,6 @@ __all__ = [
     "derive_auto_approve",
     "permission_mode_from_policy",
     "policy_from_permission_mode",
+    "suggest_mode",
     "tool_allowlist_for",
 ]

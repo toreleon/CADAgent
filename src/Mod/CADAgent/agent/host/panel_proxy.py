@@ -71,6 +71,10 @@ class PanelProxy(QtCore.QObject):
     # Worker-thread rewind asks the GUI thread to reload the active document
     # from disk after a checkpoint restore. Path is the .FCStd file.
     docReloadRequested = QtCore.Signal(str)
+    # Mode suggestion (Step 14). The runtime emits when the user's prompt
+    # looks like it should shift modes — UI surfaces a dismissible chip
+    # ("Switch to Ask?"). Never auto-flips. Args: (suggested_mode, reason).
+    modeSuggested = QtCore.Signal(str, str)
 
     def __init__(self, panel):
         super().__init__(panel)

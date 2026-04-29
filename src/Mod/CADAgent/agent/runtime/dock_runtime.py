@@ -831,6 +831,17 @@ class DockRuntime:
             ).GetString("PermissionMode", "") or "default"
         except Exception:
             cur_mode = "default"
+        # Step 14: emit a mode suggestion to the UI (chip). The legacy
+        # auto-flip stays as a fallback until the UI wires the chip and
+        # the user can act on the suggestion themselves.
+        from ..modes import Mode, policy_from_permission_mode, suggest_mode
+        cur_policy = policy_from_permission_mode(cur_mode)
+        suggestion = suggest_mode(user_text, cur_policy.mode)
+        if suggestion is not None:
+            try:
+                self._proxy.modeSuggested.emit(suggestion[0].value, suggestion[1])
+            except Exception:
+                pass
         if cur_mode == "default" and _should_auto_plan(user_text):
             self._mode_override = "plan"
             # Rebuild the client so the next turn picks up the override.
