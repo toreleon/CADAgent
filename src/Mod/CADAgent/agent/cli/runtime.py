@@ -20,6 +20,7 @@ from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 from .. import memory as project_memory
 from .. import tools as agent_tools
 from ..prompts_cli import CAD_SYSTEM_PROMPT
+from ..runtime.context_builder import format_additional_context
 from ..worker.client import WorkerError, get_shared
 from . import verify_gate
 from .doc_handle import DocHandle
@@ -154,7 +155,7 @@ async def _post_bash_probe(input_data, tool_use_id, context):  # noqa: ANN001 â€
     try:
         path = _active_doc_path()
         if not path or not os.path.exists(path):
-            return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": " ".join(pieces)}} if pieces else {}
+            return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": " ".join(pieces)}} if pieces else {}  # NB: " " join here matches pre-Step-5 behavior; the " | " join below is the canonical one
         mtime = os.path.getmtime(path)
         full_probe = _probe_mtimes.get(path) != mtime
         _probe_mtimes[path] = mtime
@@ -176,7 +177,7 @@ async def _post_bash_probe(input_data, tool_use_id, context):  # noqa: ANN001 â€
     return {
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
-            "additionalContext": " | ".join(pieces),
+            "additionalContext": format_additional_context(pieces),
         }
     }
 

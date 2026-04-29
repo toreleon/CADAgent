@@ -51,6 +51,7 @@ from claude_agent_sdk import (
 from .. import compaction as _compaction
 from .. import gui_thread, hooks, sessions as _sessions, ui_bridge
 from ..permissions import make_can_use_tool, clear_session_allowlist
+from ..runtime import context_builder as _context_builder
 from ..worker import client as worker_client
 from . import dock_tools, runtime as cli_runtime
 
@@ -274,43 +275,18 @@ def _reload_active_doc_if_stale() -> None:
 
 
 def _snapshot_active_doc() -> dict:
-    """Save the active doc if dirty and return a small summary."""
-    doc = App.ActiveDocument
-    if doc is None:
-        return {"path": None, "name": None, "label": None, "object_count": 0}
-    path = getattr(doc, "FileName", "") or ""
-    if path:
-        try:
-            doc.save()
-        except Exception:
-            pass
-    return {
-        "path": path or None,
-        "name": getattr(doc, "Name", "") or None,
-        "label": getattr(doc, "Label", "") or None,
-        "object_count": len(getattr(doc, "Objects", []) or []),
-    }
+    """Save the active doc if dirty and return a small summary.
+
+    Thin wrapper preserving the legacy dict shape used by ``submit()``
+    callers and by W2-D's WorkspaceChip. The actual snapshot lives in
+    :mod:`agent.runtime.context_builder` so Step 16 can extend it with
+    selection / view-state in one place.
+    """
+    return _context_builder.snapshot_active_doc().to_dict()
 
 
 def _build_preamble(snap: dict) -> str:
-    if snap.get("path"):
-        return (
-            f"[GUI context] Active FreeCAD document: "
-            f"{snap.get('label') or snap.get('name')!r} at {snap['path']!r} "
-            f"({snap.get('object_count', 0)} objects). Pass this path as "
-            f"the ``doc`` argument to ``memory_*`` / ``plan_*`` tools. "
-            f"You may also use ``gui_documents_list``, ``gui_open_document``, "
-            f"``gui_new_document``, or ``gui_set_active_document`` to work "
-            f"on a different file when the request calls for it. The dock "
-            f"auto-reloads the active doc in the GUI at end of turn."
-        )
-    return (
-        "[GUI context] No FreeCAD document is open. Use "
-        "``gui_new_document`` to create one (returns its on-disk path for "
-        "``memory_*`` / ``plan_*`` tools), or ``gui_open_document`` to "
-        "open an existing .FCStd. For pure questions or memory work no "
-        "document is required."
-    )
+    return _context_builder.build_preamble(snap)
 
 
 class DockRuntime:
