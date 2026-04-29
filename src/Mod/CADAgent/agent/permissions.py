@@ -16,66 +16,54 @@ from dataclasses import dataclass
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from . import hooks, ui_bridge
+from .tools import MCP_PREFIX
+from .tools.categories import Category, names_for, names_with_prefix
 
 
-# Tools whose invocation should be surfaced as a stageable "edit" rather than
-# a generic permission prompt. The user sees an intent summary + the raw
-# script (for Bash) and clicks Apply / Reject.
+# SDK built-ins that never mutate state — auto-allowed alongside the MCP
+# tools tagged READ / INSPECT.
+_SDK_READ_ONLY = {"Read", "Grep", "Glob", "TodoWrite"}
+
+
+# Tools whose invocation should be surfaced as a stageable "edit" rather
+# than a generic permission prompt. The user sees an intent summary + the
+# raw script (for Bash) and clicks Apply / Reject. UX classification, not
+# a tool category — kept explicit to make the mapping obvious.
 MUTATING_TOOLS = {
     "Bash",
     "Write",
-    "mcp__cad__gui_new_document",
-    "mcp__cad__gui_open_document",
+    f"{MCP_PREFIX}gui_new_document",
+    f"{MCP_PREFIX}gui_open_document",
 }
 
 
 # Tools that never mutate the document — auto-allow to keep the UX snappy.
-# Kept in sync with the ``annotations=_READ_ONLY`` calls in dock_tools.py /
-# mcp_tools.py and the harmless SDK built-ins.
-READ_ONLY_TOOLS = {
-    # SDK built-ins
-    "Read",
-    "Grep",
-    "Glob",
-    "TodoWrite",  # informational checklist, consumed by the runtime
-    # MCP cad — inspection
-    "mcp__cad__gui_documents_list",
-    "mcp__cad__gui_active_document",
-    "mcp__cad__gui_inspect_live",
-    # MCP cad — memory / plan reads
-    "mcp__cad__memory_read",
-    "mcp__cad__memory_parameters_get",
-    "mcp__cad__memory_decisions_list",
-    "mcp__cad__plan_active_get",
-}
+# Derived from the READ + INSPECT categories so adding a new read-only
+# MCP tool only requires updating ``agent.tools.categories``.
+READ_ONLY_TOOLS = _SDK_READ_ONLY | set(names_for(Category.READ, Category.INSPECT))
 
 
-# Plan-metadata tools are consumed by the dock runtime itself (the results are
-# turned into milestone rows / plan files). They never reach the user as a
-# prompt regardless of mode.
-PLAN_META_TOOLS = {
-    "mcp__cad__plan_emit",
-    "mcp__cad__plan_milestone_activate",
-    "mcp__cad__plan_milestone_done",
-    "mcp__cad__plan_milestone_failed",
-    "mcp__cad__exit_plan_mode",
-}
+# Plan-metadata tools are consumed by the dock runtime itself (the results
+# are turned into milestone rows / plan files). They never reach the user
+# as a prompt regardless of mode. Derived from the ``plan_`` prefix plus
+# ``exit_plan_mode``.
+PLAN_META_TOOLS = set(names_with_prefix("plan_")) | {f"{MCP_PREFIX}exit_plan_mode"}
 
 
-# File-edit-class tools. Under ``acceptEdits`` mode these auto-allow; Bash is
-# deliberately *not* in this set (shell execution stays gated, matching the
-# Claude Code convention where acceptEdits covers edits but not arbitrary
-# command execution).
-FILE_EDIT_TOOLS = {
-    "Write",
-    "mcp__cad__gui_new_document",
-    "mcp__cad__gui_open_document",
-    "mcp__cad__gui_set_active_document",
-    "mcp__cad__gui_reload_active_document",
-    "mcp__cad__memory_note_write",
-    "mcp__cad__memory_parameter_set",
-    "mcp__cad__memory_decision_record",
-}
+# File-edit-class tools. Under ``acceptEdits`` mode these auto-allow; Bash
+# is deliberately *not* in this set (shell execution stays gated, matching
+# the Claude Code convention where acceptEdits covers edits but not
+# arbitrary command execution). Doc lifecycle + sidecar writes — derived
+# from DOC_LIFECYCLE + the ``memory_`` writeable subset.
+FILE_EDIT_TOOLS = (
+    {"Write"}
+    | set(names_for(Category.DOC_LIFECYCLE))
+    | {
+        f"{MCP_PREFIX}memory_note_write",
+        f"{MCP_PREFIX}memory_parameter_set",
+        f"{MCP_PREFIX}memory_decision_record",
+    }
+)
 
 
 _INTENT_HINTS = (

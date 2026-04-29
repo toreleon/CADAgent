@@ -49,7 +49,7 @@ _CATEGORY: dict[str, Category] = {
     "gui_open_document": Category.DOC_LIFECYCLE,
     "gui_set_active_document": Category.DOC_LIFECYCLE,
     "gui_reload_active_document": Category.DOC_LIFECYCLE,
-    "doc_reload": Category.DOC_LIFECYCLE,
+    "doc_reload": Category.MUTATING,
     # Sidecar reads
     "memory_read": Category.READ,
     "memory_parameters_get": Category.READ,
@@ -83,4 +83,20 @@ def all_short_names() -> list[str]:
     return list(_CATEGORY.keys())
 
 
-__all__ = ["Category", "category_of", "names_for", "all_short_names"]
+def names_with_prefix(prefix: str, server: str = "cad") -> list[str]:
+    """Full MCP names whose short name starts with ``prefix`` (e.g. ``plan_``).
+
+    Used by ``permissions`` to derive UX-classification sets (plan-meta,
+    file-edit) without re-listing every tool by hand.
+    """
+    full_prefix = MCP_PREFIX if server == "cad" else f"mcp__{server}__"
+    return [full_prefix + n for n in _CATEGORY if n.startswith(prefix)]
+
+
+__all__ = [
+    "Category",
+    "category_of",
+    "names_for",
+    "names_with_prefix",
+    "all_short_names",
+]
