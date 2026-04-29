@@ -22,7 +22,7 @@ Local LiteLLM proxy:
 - `ANTHROPIC_API_KEY=dummy`
 - `ANTHROPIC_MODEL=gpt-5-mini`
 
-Run `scripts/cadagent` with those exported and the CLI will route through the proxy.
+Launch FreeCAD with those exported and the in‑app CAD Agent dock will route through the proxy.
 
 ## First-time setup
 
