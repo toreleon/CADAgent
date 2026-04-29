@@ -199,3 +199,8 @@ test-debug = { cmd = ["ctest", "--test-dir", "build/debug"]}
 test-release = { cmd = ["ctest", "--test-dir", "build/release"]}
 freecad-debug = "build/debug/bin/FreeCAD"
 freecad-release = "build/release/bin/FreeCAD"
+
+# Headless CAD-agent CLI (no FreeCAD GUI). Trailing args are forwarded:
+#   pixi run agent "Reply OK"
+#   pixi run agent --doc /tmp/p.FCStd "memory_note_write …"
+agent = { cmd = "python -m agent", env = { PYTHONPATH = "src/Mod/CADAgent" } }
