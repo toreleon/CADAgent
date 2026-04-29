@@ -16,7 +16,7 @@ import sys
 
 from .. import memory as project_memory
 from .. import verify_gate
-from ..cli.doc_handle import DocHandle
+from ..doc_handle import DocHandle
 from ..worker.client import get_shared
 from .agent_loop import default_loop
 from .auto_probe import active_doc_path

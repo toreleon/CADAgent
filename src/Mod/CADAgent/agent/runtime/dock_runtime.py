@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """In-FreeCAD host for the chat agent.
 
-The shared runtime in :mod:`agent.cli.runtime` builds the SDK options
+The shared runtime in :mod:`agent.runtime.options` builds the SDK options
 (system prompt, MCP tools, hooks). This module wires it onto the FreeCAD
 chat dock: the SDK runs on a dedicated worker asyncio loop while the QML
 panel — and any FreeCAD doc mutations — stay on the Qt GUI thread.
 
 The agent owns document lifecycle: it can list, create, open, switch,
-and reload documents through the MCP tools in :mod:`agent.cli.dock_tools`
+and reload documents through the MCP tools in :mod:`agent.tools.doc_lifecycle`
 — think of it like a shell session that can ``cd`` between projects.
 Geometry still happens via ``Bash → FreeCADCmd`` subprocesses (the CLI
 agent's contract); we save the active doc before each turn and auto-reload
@@ -40,7 +40,7 @@ from claude_agent_sdk import (
 
 from .. import compaction as _compaction
 from .. import gui_thread, hooks, sessions as _sessions, ui_bridge
-from ..cli import dock_tools  # GUI doc-lifecycle MCP tools (registers via @cad_tool)
+from ..tools import doc_lifecycle as dock_tools  # GUI tools (registers via @cad_tool)
 from ..host.doc_state import reload_active_doc_if_stale as _reload_active_doc_if_stale
 from ..host.multimodal import multimodal_prompt as _multimodal_prompt
 from ..host.panel_proxy import PanelProxy as _PanelProxy

@@ -247,7 +247,7 @@ def open_panel() -> None:
         return
 
     from agent.ui import qml_panel as ChatPanelMod
-    from agent.cli.dock_runtime import DockRuntime
+    from agent.runtime.dock_runtime import DockRuntime
 
     panel = ChatPanelMod.attach_panel_to_host()
     if panel is None:

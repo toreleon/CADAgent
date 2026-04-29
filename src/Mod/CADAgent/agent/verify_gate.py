@@ -25,7 +25,7 @@ import re
 from typing import Any
 
 from . import memory as project_memory
-from .cli.doc_handle import DocHandle  # doc_handle stays under cli/ until Step 18
+from .doc_handle import DocHandle
 
 
 # Verify DSL keywords whose values are mm dimensions. axis= and tol=

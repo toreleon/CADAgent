@@ -72,7 +72,7 @@ def build_options(
     os.environ.setdefault("ANTHROPIC_SMALL_FAST_MODEL", model)
 
     # Build a single MCP server holding every @cad_tool-registered function.
-    # In the dock the runtime imports agent.cli.dock_tools at module load,
+    # In the dock the runtime imports agent.tools.doc_lifecycle at module load,
     # which triggers GUI tool registration before this function runs; in the
     # standalone CLI only the inspect/memory/plan tools are registered.
     # build_server deduplicates so the legacy extra_tools list is harmless.

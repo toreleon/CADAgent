@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import pytest
 
 from agent import compaction as _compaction
-from agent.cli import dock_runtime as _dr
+from agent.runtime import dock_runtime as _dr
 
 
 # --- shared harness --------------------------------------------------------

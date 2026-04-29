@@ -9,7 +9,7 @@ def _reset_runtime_freecad():
     """The dock_runtime module captured ``App`` at import time, so it sees a
     different namespace than the per-test ``fc`` fixture. Wipe its docs here
     so tests don't bleed state into each other."""
-    from agent.cli import dock_runtime as _dr
+    from agent.runtime import dock_runtime as _dr
 
     for name in list(_dr.App.listDocuments()):
         _dr.App.closeDocument(name)
@@ -25,7 +25,7 @@ def runtime(fc, monkeypatch):
     """
     from PySide6 import QtCore  # type: ignore[import-not-found]
 
-    from agent.cli import dock_runtime
+    from agent.runtime import dock_runtime
 
     class _StubPanel(QtCore.QObject):
         def __init__(self):
@@ -54,7 +54,7 @@ def test_list_open_docs_empty(runtime):
 
 
 def test_list_open_docs_marks_active(runtime, fc, tmp_path):
-    from agent.cli import dock_runtime as _dr
+    from agent.runtime import dock_runtime as _dr
     App = _dr.App  # the runtime's bound module — what list_open_docs reads.
 
     a = App.openDocument(str(tmp_path / "a.FCStd"))
@@ -70,7 +70,7 @@ def test_list_open_docs_marks_active(runtime, fc, tmp_path):
 
 
 def test_set_active_document_by_name_updates_workspace(runtime, fc, tmp_path):
-    from agent.cli import dock_runtime as _dr
+    from agent.runtime import dock_runtime as _dr
     App = _dr.App  # the runtime's bound module — what list_open_docs reads.
 
     a = App.openDocument(str(tmp_path / "a.FCStd"))
@@ -87,7 +87,7 @@ def test_set_active_document_by_name_updates_workspace(runtime, fc, tmp_path):
 
 
 def test_set_active_document_by_label_fallback(runtime, fc, tmp_path):
-    from agent.cli import dock_runtime as _dr
+    from agent.runtime import dock_runtime as _dr
     App = _dr.App  # the runtime's bound module — what list_open_docs reads.
 
     doc = App.openDocument(str(tmp_path / "labelled.FCStd"))

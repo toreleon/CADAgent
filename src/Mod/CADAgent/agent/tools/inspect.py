@@ -75,7 +75,7 @@ async def inspect(args):
 async def verify_spec(args):
     try:
         # Verify gate currently lives under cli/; Step 10 moves it up to agent/.
-        from ..cli import verify_gate
+        from .. import verify_gate
         doc = handle(args)
         client = await get_shared()
         await _ensure_open(client, doc.FileName, reload=True)

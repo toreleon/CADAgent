@@ -20,7 +20,7 @@ import re
 from typing import Any
 
 from .. import memory as project_memory
-from ..cli.doc_handle import DocHandle
+from ..doc_handle import DocHandle
 from ..worker.client import WorkerError, get_shared
 from .context_builder import format_additional_context
 

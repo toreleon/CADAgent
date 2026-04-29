@@ -15,7 +15,7 @@ from typing import Any
 
 from mcp.types import ToolAnnotations
 
-from ..cli.doc_handle import DocHandle
+from ..doc_handle import DocHandle
 
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True)
