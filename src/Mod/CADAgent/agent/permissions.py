@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from . import hooks, ui_bridge
+from .modes import Mode, ModePolicy, policy_from_permission_mode
 from .tools import MCP_PREFIX
 from .tools.categories import Category, names_for, names_with_prefix
 
@@ -147,27 +148,31 @@ def session_allowlist() -> set[str]:
     return set(_SESSION_ALLOWLIST)
 
 
-def make_can_use_tool(proxy, permission_mode: str = "default", doc_dir_provider=None):
+def make_can_use_tool(
+    proxy,
+    permission_mode: str | ModePolicy = "default",
+    doc_dir_provider=None,
+):
     """Return a `can_use_tool` coroutine that asks the GUI thread via `proxy`.
 
     `proxy` is a `_PanelProxy` QObject whose `permissionRequest` signal is
     connected to a slot that creates a card on the panel and resolves the
     provided concurrent.futures.Future on Apply / Reject.
 
-    ``permission_mode`` is the effective mode for the current SDK client.
-    When the SDK receives a ``can_use_tool`` callback, it delegates every
-    decision to us regardless of its own permission mode — so we replicate
-    the mode semantics here:
-
-    * ``bypassPermissions`` — allow everything without prompting.
-    * ``acceptEdits`` — auto-allow mutating tools; still prompt for anything
-      else that isn't explicitly read-only.
-    * ``default`` / ``plan`` — prompt as before.
+    ``permission_mode`` accepts either a legacy SDK string (``"default"``,
+    ``"acceptEdits"``, ``"bypassPermissions"``, ``"plan"``) or a
+    ``ModePolicy``. Both flow through the same decision table; the string
+    form is converted via ``modes.policy_from_permission_mode`` so behavior
+    is identical to pre-Step-8.
     """
 
-    auto_allow_all = permission_mode == "bypassPermissions"
-    auto_allow_edits = permission_mode == "acceptEdits"
-    plan_only = permission_mode == "plan"
+    if isinstance(permission_mode, ModePolicy):
+        policy = permission_mode
+    else:
+        policy = policy_from_permission_mode(permission_mode)
+    auto_allow_all = policy.auto_allow_all
+    auto_allow_edits = policy.auto_allow_edits
+    plan_only = policy.mode is Mode.ASK
 
     async def can_use_tool(tool_name, tool_input, context=None):
         # PreToolUse hook runs first — a user-configured command can block
