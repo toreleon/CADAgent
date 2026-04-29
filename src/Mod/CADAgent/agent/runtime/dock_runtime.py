@@ -805,6 +805,21 @@ class DockRuntime:
         except Exception as exc:
             self.panel.show_error(f"Could not inspect active document: {exc}")
             return
+        # Step 16: also pull selection + view state on the same GUI thread
+        # round-trip so the preamble can mention what the user is focused on.
+        # Failures degrade to no selection info — never block the turn on it.
+        try:
+            from ..host import doc_state as _doc_state
+            sel_and_view = gui_thread.run_sync(
+                lambda: (
+                    _doc_state.snapshot_selection(),
+                    _doc_state.snapshot_view_state(),
+                ),
+                timeout=10.0,
+            )
+            sel_line = _doc_state.render_selection_line(*sel_and_view)
+        except Exception:
+            sel_line = ""
         self._set_workspace_path(snap.get("path"))
         # UserPromptSubmit hook — a configured command can veto the turn
         # before any LLM round-trip. We surface the message via show_error
@@ -847,7 +862,10 @@ class DockRuntime:
             # Rebuild the client so the next turn picks up the override.
             if self.client is not None and self._loop is not None:
                 asyncio.run_coroutine_threadsafe(self._aclose(), self._loop)
-        wrapped = f"{_build_preamble(snap)}\n\n{user_text}"
+        preamble = _build_preamble(snap)
+        if sel_line:
+            preamble = f"{preamble}\n{sel_line}"
+        wrapped = f"{preamble}\n\n{user_text}"
         # Stash for the overflow-retry path: ``_ask`` resubmits this exactly
         # once if the SDK raises a context-overflow error mid-turn.
         self._last_user_prompt = wrapped
