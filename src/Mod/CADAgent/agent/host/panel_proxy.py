@@ -47,12 +47,11 @@ class PanelProxy(QtCore.QObject):
 
     # Reserved for future parity with the deleted integrated runtime.
     milestoneUpsert = QtCore.Signal(str, str, str, object, object)
-    verificationResult = QtCore.Signal(str, object)
-    decisionRecorded = QtCore.Signal(str, object)
+    # Removed at Step 17: verificationResult, decisionRecorded, subagentSpan —
+    # zero emit / connect sites across agent/ and ui/. Re-add when needed.
     compactionEvent = QtCore.Signal(object)
     contextUsage = QtCore.Signal(int, int)
     compactingChanged = QtCore.Signal(bool)
-    subagentSpan = QtCore.Signal(str, str, str)
     permissionModeChanged = QtCore.Signal(str)
     streamState = QtCore.Signal(str, bool)
     todosUpdate = QtCore.Signal(object)
