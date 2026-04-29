@@ -14,10 +14,10 @@ with built-in SDK tools.
 
 from __future__ import annotations
 
-from claude_agent_sdk import tool
-
 from ..worker.client import WorkerClient, WorkerError, get_shared
 from ._common import READ_ONLY, err, handle, ok, schema
+from ._registry import cad_tool
+from .categories import Category
 
 
 _worker_open_doc: str | None = None  # tracks last-opened path so we skip redundant opens
@@ -31,7 +31,7 @@ async def _ensure_open(client: WorkerClient, path: str, *, reload: bool = False)
         _worker_open_doc = path
 
 
-@tool(
+@cad_tool(
     "inspect",
     "Run a structured geometry query against the active .FCStd. Cheap (sub-100ms): the worker holds the doc in memory. "
     "Query DSL: 'bbox' | 'bbox of NAME' | 'face_types' | 'face_types of NAME' | "
@@ -43,6 +43,7 @@ async def _ensure_open(client: WorkerClient, path: str, *, reload: bool = False)
         query={"type": "string", "required": True},
         reload={"type": "boolean"},
     ),
+    category=Category.INSPECT,
     annotations=READ_ONLY,
 )
 async def inspect(args):
@@ -61,13 +62,14 @@ async def inspect(args):
         return err(str(exc))
 
 
-@tool(
+@cad_tool(
     "verify_spec",
     "Run every parameter's `verify` query through the worker and return a structured "
     "PASS/FAIL table. This is the same gate the harness runs at Stop — call it before "
     "declaring done so you can fix any FAIL rows BEFORE the harness blocks your stop. "
     "Inch→mm conversion is automatic; the table shows the mm-native query that ran.",
     schema(),
+    category=Category.INSPECT,
     annotations=READ_ONLY,
 )
 async def verify_spec(args):
@@ -93,11 +95,12 @@ async def verify_spec(args):
         return err(str(exc))
 
 
-@tool(
+@cad_tool(
     "doc_reload",
     "Force the worker to re-read the active .FCStd from disk. Call after a Bash script that touched the file if you "
     "haven't already passed reload=true to inspect.",
     schema(),
+    category=Category.MUTATING,
 )
 async def doc_reload(args):
     try:

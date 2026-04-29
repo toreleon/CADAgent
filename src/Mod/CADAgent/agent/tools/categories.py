@@ -1,28 +1,24 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Permission categories for every MCP tool the agent can call.
+"""Permission categories.
 
-Single source of truth used by ``agent.permissions`` (Step 3 flip):
+The category for each tool is declared at the ``@cad_tool`` decoration
+site (Step 4 of the harness refactor); this module just defines the
+``Category`` enum and the live-registry-driven lookup helpers used by
+``agent.permissions``.
+
+Categories:
 
 * ``READ`` — pure reads of project memory or sidecar state.
 * ``INSPECT`` — read-only worker queries (``inspect``, ``inspect_live``,
   ``verify_spec``).
-* ``DOC_LIFECYCLE`` — open / new / activate / reload a FreeCAD document.
-  These mutate GUI state but not geometry; they're prompt-worthy by
-  default but auto-allowable under acceptEdits / agent autonomous modes.
-* ``MUTATING`` — anything that writes to disk (memory_*, plan_*) or
-  changes the doc on disk (``doc_reload`` is currently MUTATING because
-  it can clobber unsaved worker state).
-
-Tool names here are the *short* names (without the ``mcp__cad__`` prefix).
-Use ``names_for(cat, server="cad")`` to get prefixed names for the
-permissions allowlist.
+* ``DOC_LIFECYCLE`` — open / new / activate a FreeCAD document.
+* ``MUTATING`` — anything that writes to disk or alters worker state
+  (memory_*, plan_*, ``doc_reload``).
 """
 
 from __future__ import annotations
 
 from enum import Enum
-
-from . import MCP_PREFIX
 
 
 class Category(str, Enum):
@@ -32,65 +28,40 @@ class Category(str, Enum):
     MUTATING = "mutating"
 
 
-# Each tool's category. Names are the short, unprefixed names used by the
-# ``@tool(...)`` decorator. Keep this in sync with the @tool definitions
-# under agent/cli/{dock_tools,mcp_tools}.py until Step 4 moves them all
-# under @cad_tool with category metadata.
-_CATEGORY: dict[str, Category] = {
-    # Worker-backed inspection (read-only)
-    "inspect": Category.INSPECT,
-    "verify_spec": Category.INSPECT,
-    "gui_inspect_live": Category.INSPECT,
-    # Read-only document queries
-    "gui_documents_list": Category.READ,
-    "gui_active_document": Category.READ,
-    # Document lifecycle (mutates GUI state)
-    "gui_new_document": Category.DOC_LIFECYCLE,
-    "gui_open_document": Category.DOC_LIFECYCLE,
-    "gui_set_active_document": Category.DOC_LIFECYCLE,
-    "gui_reload_active_document": Category.DOC_LIFECYCLE,
-    "doc_reload": Category.MUTATING,
-    # Sidecar reads
-    "memory_read": Category.READ,
-    "memory_parameters_get": Category.READ,
-    "memory_decisions_list": Category.READ,
-    "plan_active_get": Category.READ,
-    # Sidecar mutations
-    "memory_note_write": Category.MUTATING,
-    "memory_parameter_set": Category.MUTATING,
-    "memory_decision_record": Category.MUTATING,
-    "plan_emit": Category.MUTATING,
-    "plan_milestone_activate": Category.MUTATING,
-    "plan_milestone_done": Category.MUTATING,
-    "plan_milestone_failed": Category.MUTATING,
-    "exit_plan_mode": Category.MUTATING,
-}
-
-
 def category_of(short_name: str) -> Category | None:
-    return _CATEGORY.get(short_name)
+    """Return the category of the registered tool ``short_name``."""
+    from ._registry import _REGISTRY  # local import to dodge the cycle
+
+    spec = _REGISTRY.get(short_name)
+    return spec.category if spec else None
 
 
 def names_for(*cats: Category, server: str = "cad") -> list[str]:
-    """Full MCP names (with ``mcp__<server>__`` prefix) for every tool in
-    one of the given categories."""
+    """Full MCP names (``mcp__<server>__<short>``) for every registered tool
+    whose category is in ``cats``."""
+    from ._registry import MCP_PREFIX, _REGISTRY  # local import
+
     prefix = MCP_PREFIX if server == "cad" else f"mcp__{server}__"
     wanted = set(cats)
-    return [prefix + n for n, c in _CATEGORY.items() if c in wanted]
+    return [prefix + spec.name for spec in _REGISTRY.values() if spec.category in wanted]
 
 
 def all_short_names() -> list[str]:
-    return list(_CATEGORY.keys())
+    from ._registry import _REGISTRY
+
+    return [spec.name for spec in _REGISTRY.values()]
 
 
 def names_with_prefix(prefix: str, server: str = "cad") -> list[str]:
     """Full MCP names whose short name starts with ``prefix`` (e.g. ``plan_``).
 
-    Used by ``permissions`` to derive UX-classification sets (plan-meta,
-    file-edit) without re-listing every tool by hand.
+    Used by ``permissions`` to derive UX-classification sets (plan-meta)
+    without re-listing every tool by hand.
     """
+    from ._registry import MCP_PREFIX, _REGISTRY
+
     full_prefix = MCP_PREFIX if server == "cad" else f"mcp__{server}__"
-    return [full_prefix + n for n in _CATEGORY if n.startswith(prefix)]
+    return [full_prefix + spec.name for spec in _REGISTRY.values() if spec.name.startswith(prefix)]
 
 
 __all__ = [

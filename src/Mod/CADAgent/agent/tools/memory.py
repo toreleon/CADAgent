@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import traceback
 
-from claude_agent_sdk import tool
-
 from .. import memory as project_memory
 from ._common import READ_ONLY, err, handle, ok, schema
+from ._registry import cad_tool
+from .categories import Category
 
 
-@tool(
+@cad_tool(
     "memory_read",
     "Return the full project-memory sidecar (design_intent, parameters, decisions, plan, naming) for the given .FCStd.",
     schema(),
+    category=Category.READ,
     annotations=READ_ONLY,
 )
 async def memory_read(args):
@@ -28,7 +29,7 @@ async def memory_read(args):
         return err(str(exc), traceback=traceback.format_exc(limit=4))
 
 
-@tool(
+@cad_tool(
     "memory_note_write",
     "Write a key/value into a top-level section of the sidecar (e.g. section='design_intent' or 'naming').",
     schema(
@@ -36,6 +37,7 @@ async def memory_read(args):
         key={"type": "string", "required": True},
         value={},  # any JSON value
     ),
+    category=Category.MUTATING,
 )
 async def memory_note_write(args):
     try:
@@ -51,7 +53,7 @@ async def memory_note_write(args):
         return err(str(exc))
 
 
-@tool(
+@cad_tool(
     "memory_parameter_set",
     "Set a named design parameter (value + unit + optional note + optional verify query) in the sidecar. "
     "If verify is provided (an inspect-DSL query string like 'slots width=8 length=15' or 'spheres radius=250'), "
@@ -64,6 +66,7 @@ async def memory_note_write(args):
         note={"type": "string"},
         verify={"type": "string"},
     ),
+    category=Category.MUTATING,
 )
 async def memory_parameter_set(args):
     try:
@@ -81,10 +84,11 @@ async def memory_parameter_set(args):
         return err(str(exc))
 
 
-@tool(
+@cad_tool(
     "memory_parameters_get",
     "Return all named parameters recorded for this doc.",
     schema(),
+    category=Category.READ,
     annotations=READ_ONLY,
 )
 async def memory_parameters_get(args):
@@ -94,7 +98,7 @@ async def memory_parameters_get(args):
         return err(str(exc))
 
 
-@tool(
+@cad_tool(
     "memory_decision_record",
     "Record a typed design decision (goal/constraints/alternatives/choice/rationale/depends_on). Depends_on ids link to earlier decisions (d-NNN).",
     schema(
@@ -106,6 +110,7 @@ async def memory_parameters_get(args):
         depends_on={"type": "array", "items": {"type": "string"}},
         milestone={"type": "string"},
     ),
+    category=Category.MUTATING,
 )
 async def memory_decision_record(args):
     try:
@@ -125,10 +130,11 @@ async def memory_decision_record(args):
         return err(str(exc))
 
 
-@tool(
+@cad_tool(
     "memory_decisions_list",
     "Dump every decision record for this doc (for re-grounding in later turns).",
     schema(),
+    category=Category.READ,
     annotations=READ_ONLY,
 )
 async def memory_decisions_list(args):

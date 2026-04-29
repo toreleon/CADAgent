@@ -15,12 +15,12 @@ import re
 import sys
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions, HookMatcher, create_sdk_mcp_server
+from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
 from .. import memory as project_memory
+from .. import tools as agent_tools
 from ..prompts_cli import CAD_SYSTEM_PROMPT
 from ..worker.client import WorkerError, get_shared
-from . import mcp_tools
 from . import verify_gate
 from .doc_handle import DocHandle
 from .subagents import build_agents
@@ -278,8 +278,12 @@ def build_options(
     model = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7")
     os.environ.setdefault("ANTHROPIC_SMALL_FAST_MODEL", model)
 
-    tool_funcs = list(mcp_tools.TOOL_FUNCS) + list(extra_tools or [])
-    server = create_sdk_mcp_server(name="cad", tools=tool_funcs)
+    # Build a single MCP server holding every @cad_tool-registered function.
+    # In the dock the runtime imports agent.cli.dock_tools at module load,
+    # which triggers GUI tool registration before this function runs; in the
+    # standalone CLI only the inspect/memory/plan tools are registered.
+    # build_server deduplicates so the legacy extra_tools list is harmless.
+    server = agent_tools.build_server(name="cad", extra=list(extra_tools or []))
 
     # SDK built-ins the agent is allowed to use. Deliberately excluding Edit:
     # the agent is supposed to write new .py scripts via Bash heredocs,
@@ -294,11 +298,20 @@ def build_options(
         "Agent",
         "TodoWrite",
     ]
-    allowed = (
-        mcp_tools.allowed_tool_names("cad")
+    # Names of every registered tool (CLI + GUI when imported), plus any
+    # legacy extras and the SDK built-ins. dedup keeps the list clean if a
+    # caller still passes the GUI names by hand.
+    allowed_seen: set[str] = set()
+    allowed: list[str] = []
+    for n in (
+        agent_tools.allowed_tool_names("cad")
         + list(extra_allowed_tool_names or [])
         + sdk_builtins
-    )
+    ):
+        if n in allowed_seen:
+            continue
+        allowed_seen.add(n)
+        allowed.append(n)
 
     kwargs: dict[str, Any] = dict(
         model=model,

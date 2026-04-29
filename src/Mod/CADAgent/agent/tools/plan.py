@@ -8,10 +8,10 @@ and signals the runtime to leave plan mode for the next turn.
 
 from __future__ import annotations
 
-from claude_agent_sdk import tool
-
 from .. import memory as project_memory
 from ._common import READ_ONLY, err, handle, ok, schema
+from ._registry import cad_tool
+from .categories import Category
 
 
 _MILESTONE_SCHEMA = {
@@ -27,13 +27,14 @@ _MILESTONE_SCHEMA = {
 }
 
 
-@tool(
+@cad_tool(
     "plan_emit",
     "Submit a milestone plan. Replaces any existing plan. Each milestone needs at least a title; acceptance_criteria define 'done'.",
     schema(
         milestones={"type": "array", "items": _MILESTONE_SCHEMA, "minItems": 1, "required": True},
         plan_id={"type": "string"},
     ),
+    category=Category.MUTATING,
 )
 async def plan_emit(args):
     try:
@@ -44,10 +45,11 @@ async def plan_emit(args):
         return err(str(exc))
 
 
-@tool(
+@cad_tool(
     "plan_active_get",
     "Return the currently active milestone, or the next pending one. {milestone: null} when no plan exists.",
     schema(),
+    category=Category.READ,
     annotations=READ_ONLY,
 )
 async def plan_active_get(args):
@@ -81,7 +83,7 @@ def _milestone_transition_schema() -> dict:
     )
 
 
-@tool("plan_milestone_activate", "Mark a milestone as 'active'.", _milestone_transition_schema())
+@cad_tool("plan_milestone_activate", "Mark a milestone as 'active'.", _milestone_transition_schema(), category=Category.MUTATING)
 async def plan_milestone_activate(args):
     try:
         return ok(_transition(args, "active"))
@@ -89,7 +91,7 @@ async def plan_milestone_activate(args):
         return err(str(exc))
 
 
-@tool("plan_milestone_done", "Mark a milestone as 'done'. Call only after verifying geometry.", _milestone_transition_schema())
+@cad_tool("plan_milestone_done", "Mark a milestone as 'done'. Call only after verifying geometry.", _milestone_transition_schema(), category=Category.MUTATING)
 async def plan_milestone_done(args):
     try:
         return ok(_transition(args, "done"))
@@ -97,7 +99,7 @@ async def plan_milestone_done(args):
         return err(str(exc))
 
 
-@tool("plan_milestone_failed", "Mark a milestone as 'failed'. Include a short 'notes' diagnosis.", _milestone_transition_schema())
+@cad_tool("plan_milestone_failed", "Mark a milestone as 'failed'. Include a short 'notes' diagnosis.", _milestone_transition_schema(), category=Category.MUTATING)
 async def plan_milestone_failed(args):
     try:
         return ok(_transition(args, "failed"))
@@ -105,7 +107,7 @@ async def plan_milestone_failed(args):
         return err(str(exc))
 
 
-@tool(
+@cad_tool(
     "exit_plan_mode",
     "Leave plan mode and begin execution. Call this only after you have "
     "finished researching and have written a final plan summary. Pass the "
@@ -115,6 +117,7 @@ async def plan_milestone_failed(args):
     schema(
         summary={"type": "string", "required": True},
     ),
+    category=Category.MUTATING,
 )
 async def exit_plan_mode(args):
     """Persist the plan and signal the runtime to leave plan mode.

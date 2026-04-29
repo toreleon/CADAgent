@@ -20,11 +20,12 @@ import traceback
 from typing import Any
 
 import FreeCAD as App
-from claude_agent_sdk import tool
 
 from .. import gui_thread
 from ..worker import client as worker_client
 from ._common import READ_ONLY, err, ok
+from ._registry import cad_tool
+from .categories import Category
 
 
 def _doc_summary(doc) -> dict:
@@ -36,10 +37,11 @@ def _doc_summary(doc) -> dict:
     }
 
 
-@tool(
+@cad_tool(
     "gui_documents_list",
     "List every FreeCAD document currently open in the GUI, plus which one is active. The active doc is the agent's current workspace; use ``gui_set_active_document`` to switch.",
     {"type": "object", "properties": {}, "required": []},
+    category=Category.READ,
     annotations=READ_ONLY,
 )
 async def gui_documents_list(args):
@@ -56,10 +58,11 @@ async def gui_documents_list(args):
         return err(str(exc), traceback=traceback.format_exc(limit=4))
 
 
-@tool(
+@cad_tool(
     "gui_active_document",
     "Return the active FreeCAD document (name, label, on-disk path, object count), or null if no document is open.",
     {"type": "object", "properties": {}, "required": []},
+    category=Category.READ,
     annotations=READ_ONLY,
 )
 async def gui_active_document(args):
@@ -85,7 +88,7 @@ def _resolve_path(path: str | None, *, default_stem: str) -> str:
     return tmp
 
 
-@tool(
+@cad_tool(
     "gui_new_document",
     "Create a new empty FreeCAD document, save it to ``path`` (or to a unique temp path if omitted), and make it the active doc. Returns the on-disk path so subsequent memory_/plan_ tools can address it.",
     {
@@ -96,6 +99,7 @@ def _resolve_path(path: str | None, *, default_stem: str) -> str:
         },
         "required": [],
     },
+    category=Category.DOC_LIFECYCLE,
 )
 async def gui_new_document(args):
     try:
@@ -115,7 +119,7 @@ async def gui_new_document(args):
         return err(str(exc), traceback=traceback.format_exc(limit=4))
 
 
-@tool(
+@cad_tool(
     "gui_open_document",
     "Open an existing .FCStd in the GUI (or activate it if already open) and make it the active doc.",
     {
@@ -123,6 +127,7 @@ async def gui_new_document(args):
         "properties": {"path": {"type": "string"}},
         "required": ["path"],
     },
+    category=Category.DOC_LIFECYCLE,
 )
 async def gui_open_document(args):
     try:
@@ -147,7 +152,7 @@ async def gui_open_document(args):
         return err(str(exc), traceback=traceback.format_exc(limit=4))
 
 
-@tool(
+@cad_tool(
     "gui_set_active_document",
     "Switch the active document to one already open in the GUI, by document name (the internal ``Name`` attribute). Use ``gui_documents_list`` first to see candidates.",
     {
@@ -155,6 +160,7 @@ async def gui_open_document(args):
         "properties": {"name": {"type": "string"}},
         "required": ["name"],
     },
+    category=Category.DOC_LIFECYCLE,
 )
 async def gui_set_active_document(args):
     try:
@@ -176,10 +182,11 @@ async def gui_set_active_document(args):
         return err(str(exc), traceback=traceback.format_exc(limit=4))
 
 
-@tool(
+@cad_tool(
     "gui_reload_active_document",
     "Re-open the active document from disk. The dock auto-runs this at end of turn; only call it manually if a Bash → FreeCADCmd subprocess wrote changes mid-turn and you need to re-read them through GUI tools.",
     {"type": "object", "properties": {}, "required": []},
+    category=Category.DOC_LIFECYCLE,
 )
 async def gui_reload_active_document(args):
     try:
@@ -205,7 +212,7 @@ async def gui_reload_active_document(args):
         return err(str(exc), traceback=traceback.format_exc(limit=4))
 
 
-@tool(
+@cad_tool(
     "gui_inspect_live",
     (
         "Fast live introspection of a .FCStd via a long-lived worker "
@@ -226,6 +233,7 @@ async def gui_reload_active_document(args):
         },
         "required": [],
     },
+    category=Category.INSPECT,
     annotations=READ_ONLY,
 )
 async def gui_inspect_live(args):
