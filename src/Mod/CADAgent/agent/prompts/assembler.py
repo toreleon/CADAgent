@@ -1,21 +1,14 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Compose the system prompt from versioned ``.md`` sections.
 
-Step 6 keeps the surface tiny: one section file (``core.md``), no
-include conditions, no per-mode budgeting. The assembler returns the
-file's contents verbatim — we just want the seam in place so Step 7
-can split the file without changing the call sites.
+Step 7 carves the prompt into topical files (``core``, ``bash_contract``,
+``conventions/slots``, …). The assembler concatenates them in a fixed
+order whose output is byte-identical to the pre-Step-7 single
+``CAD_SYSTEM_PROMPT`` string. Step 12 layers ``include_when`` rules on
+top so cookbook entries become hint-driven and per-mode budgets kick in.
 
-The intended mature shape (Step 12):
-
-* per-section ``.md`` files with YAML front-matter declaring ``id``,
-  ``include_when``, ``budget_tokens``, ``order``;
-* ``PromptHints`` derived from ``Mode`` + active doc + user text +
-  attachment kinds;
-* selection rules that always include core/etiquette/gates/mode and
-  conditionally include cookbook entries;
-* a stable cache prefix (core + mode + bash_contract + gates) and a
-  variable tail (cookbook + ContextBuilder output).
+Section order is preserved as a module-level tuple so it can be diffed
+in a snapshot test (``test_prompt_assembler.py``, planned for Step 12).
 """
 
 from __future__ import annotations
@@ -24,16 +17,40 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 _PROMPTS_DIR = Path(__file__).resolve().parent
-_SECTION_DIR = _PROMPTS_DIR
+
+
+# Document order. Every section is currently always-included; Step 12
+# replaces this with a policy table keyed on PromptHints.
+_DEFAULT_SECTIONS: tuple[str, ...] = (
+    "core",
+    "bash_contract",
+    "conventions/slots",
+    "conventions/validity",
+    "gates/hard_limits",
+    "bash_contract_subsections",
+    "invariants",
+    "geometry/cookbook_index",
+    "geometry/obround_slot",
+    "geometry/spherical_dome",
+    "geometry/cruciform",
+    "geometry/two_view_stackup",
+    "conventions/landmines",
+    "worked_example",
+    "inspect_contract",
+    "workflow",
+    "error_recipes",
+    "when_to_stop",
+    "etiquette",
+    "modes_legacy",
+)
 
 
 @dataclass(frozen=True)
 class PromptHints:
     """Inputs to ``build_system_prompt`` selection / budgeting.
 
-    Step 6 only stores the inputs; ``build_system_prompt`` ignores them
-    until Step 12 wires up ``include_when``. The dataclass exists now
-    so call sites can be migrated to pass it through.
+    Step 7: ``build_system_prompt`` ignores hints entirely. Step 12 wires
+    them up to ``include_when`` rules.
     """
 
     mode: str = "agent"  # placeholder; Mode enum lands at Step 8
@@ -45,26 +62,24 @@ class PromptHints:
 
 
 def _load_section(section_id: str) -> str:
-    """Read ``<section_id>.md`` from the prompts dir, raise if missing.
-
-    Subdirs (e.g. ``geometry/obround_slot``) are supported via the
-    same separator as the section id.
-    """
-    path = _SECTION_DIR / f"{section_id}.md"
-    return path.read_text(encoding="utf-8")
+    """Read ``<section_id>.md`` from the prompts dir, raise if missing."""
+    return (_PROMPTS_DIR / f"{section_id}.md").read_text(encoding="utf-8")
 
 
 def build_system_prompt(
     hints: PromptHints | None = None,
     budget: int = 12_000,
+    sections: tuple[str, ...] | None = None,
 ) -> tuple[str, list[str]]:
     """Return ``(assembled_prompt, included_section_ids)``.
 
-    Step 6: one section, ``core``, returned verbatim. Hints + budget
-    accepted but not used.
+    Step 7: concatenate ``sections`` (default: every section in document
+    order) verbatim. Output equals the pre-refactor ``CAD_SYSTEM_PROMPT``
+    string byte-for-byte.
     """
-    text = _load_section("core")
-    return text, ["core"]
+    use = sections if sections is not None else _DEFAULT_SECTIONS
+    text = "".join(_load_section(s) for s in use)
+    return text, list(use)
 
 
 __all__ = ["PromptHints", "build_system_prompt"]
