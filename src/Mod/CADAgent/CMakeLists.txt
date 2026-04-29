@@ -31,6 +31,7 @@ SET(CADAgent_AGENT_CLI
     agent/cli/mcp_tools.py
     agent/cli/runtime.py
     agent/cli/subagents.py
+    agent/cli/verify_gate.py
 )
 
 SET(CADAgent_AGENT_WORKER

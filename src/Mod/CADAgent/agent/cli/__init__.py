@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Standalone CLI agent (Option A) — runs outside FreeCAD.
+"""In-FreeCAD agent runtime.
 
-The agent here uses the SDK's built-in ``Bash`` tool to drive FreeCAD via
-``FreeCADCmd`` subprocesses, and keeps a thin MCP surface for the memory
-sidecar + milestone plan (which don't need a live FreeCAD process).
-
-Entry point: ``scripts/cadagent``. Python module entry: ``agent.cli.main``.
+The chat dock (``agent.ui.qml_panel``) hosts :class:`agent.cli.dock_runtime.DockRuntime`,
+which spins up a ``ClaudeSDKClient`` on a worker asyncio thread. The agent
+drives FreeCAD via the SDK's built-in ``Bash`` tool invoking ``FreeCADCmd``
+subprocesses, plus an MCP surface for live document inspection and the
+memory / plan sidecar.
 """

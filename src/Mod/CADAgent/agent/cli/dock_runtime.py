@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""In-FreeCAD host for the standalone CLI agent.
+"""In-FreeCAD host for the chat agent.
 
-The CLI runtime in :mod:`agent.cli.runtime` is designed for headless use
-(``scripts/cadagent``). This module wraps it so the FreeCAD chat dock can
-drive the same agent without spawning a subprocess: the SDK runs on a
-dedicated worker asyncio loop, while the QML panel — and any FreeCAD doc
-mutations — stay on the Qt GUI thread.
+The shared runtime in :mod:`agent.cli.runtime` builds the SDK options
+(system prompt, MCP tools, hooks). This module wires it onto the FreeCAD
+chat dock: the SDK runs on a dedicated worker asyncio loop while the QML
+panel — and any FreeCAD doc mutations — stay on the Qt GUI thread.
 
 The agent owns document lifecycle: it can list, create, open, switch,
 and reload documents through the MCP tools in :mod:`agent.cli.dock_tools`

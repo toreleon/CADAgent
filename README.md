@@ -4,7 +4,7 @@
 
 ### AI-powered 3D parametric modeling — your CAD copilot, built on FreeCAD
 
-CADAgent is a project forked from [FreeCAD](https://www.freecad.org). It keeps everything you love about FreeCAD and adds an AI assistant directly inside the app: a chat panel that opens automatically at launch (think GitHub Copilot, but for CAD) and a command‑line agent that can drive FreeCAD on your behalf.
+CADAgent is a project forked from [FreeCAD](https://www.freecad.org). It keeps everything you love about FreeCAD and adds an AI assistant directly inside the app: a chat panel that opens automatically at launch (think GitHub Copilot, but for CAD).
 
 > **Status:** early development. Things move fast and may break. Feedback and contributions are very welcome.
 
@@ -26,7 +26,6 @@ If you have never used FreeCAD before, CADAgent is a great way to start: ask the
 CADAgent is the FreeCAD 1.2.x source tree plus:
 
 - A new workbench/module: [src/Mod/CADAgent/](src/Mod/CADAgent/) — the in‑app chat dock, agent runtime, sessions store, and rewind/compaction logic.
-- A standalone CLI agent: [scripts/cadagent](scripts/cadagent) and [scripts/cadagent-cli](scripts/cadagent-cli) — drives FreeCAD via `FreeCADCmd` subprocesses, no GUI required.
 - A `pixi`-managed build environment ([pixi.toml](pixi.toml)) that pins the toolchain so `configure-debug` / `build-debug` work out of the box.
 - The Anthropic Claude Agent SDK as the default agent backbone, routed through any OpenAI/Anthropic‑compatible endpoint via [LiteLLM](https://github.com/BerriAI/litellm).
 
@@ -80,14 +79,6 @@ env HOME=$PWD/.fc-home \
     build/debug/bin/FreeCAD
 ```
 
-### Standalone agent CLI
-
-Once the debug tree is built and your AI backend is configured, you can drive FreeCAD from the terminal:
-
-```bash
-scripts/cadagent "create a 20x10x5 mm plate and save it to /tmp/plate.FCStd"
-```
-
 ## Configuring the AI backend
 
 CADAgent talks to any Anthropic‑compatible endpoint. The repo is pre‑wired for a local [LiteLLM](https://github.com/BerriAI/litellm) proxy:
@@ -98,7 +89,7 @@ export ANTHROPIC_API_KEY=dummy
 export ANTHROPIC_MODEL=gpt-5-mini
 ```
 
-Replace those values with your own provider/key/model if you don’t want to run a proxy. The same variables are picked up by the in‑app chat dock and by `scripts/cadagent`.
+Replace those values with your own provider/key/model if you don’t want to run a proxy. The same variables are picked up by the in‑app chat dock.
 
 ## Tests
 
@@ -120,7 +111,6 @@ CADAgent‑specific tests live in [src/Mod/CADAgent/tests/](src/Mod/CADAgent/tes
 | [src/Gui/](src/Gui/) | Qt + Coin3D GUI — from FreeCAD |
 | [src/Mod/](src/Mod/) | Workbenches: Part, PartDesign, Sketcher, Assembly, FEM, …  |
 | [src/Mod/CADAgent/](src/Mod/CADAgent/) | **New** — chat dock, agent runtime, sessions, rewind/compaction |
-| [scripts/cadagent](scripts/cadagent) | Standalone CLI agent entrypoint |
 | [pixi.toml](pixi.toml) / [CMakePresets.json](CMakePresets.json) | Build tooling |
 | [tests/](tests/) | Upstream FreeCAD test suites |
 
