@@ -17,24 +17,14 @@ it after, so the GUI reflects whatever the subprocess wrote.
 from __future__ import annotations
 
 import asyncio
-import base64
 import concurrent.futures
 import json
-import mimetypes
 import os
 import threading
 import traceback
 from typing import Any
 
 import FreeCAD as App
-
-try:
-    from PySide import QtCore
-except ImportError:
-    try:
-        from PySide6 import QtCore
-    except ImportError:
-        from PySide2 import QtCore
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -50,8 +40,12 @@ from claude_agent_sdk import (
 
 from .. import compaction as _compaction
 from .. import gui_thread, hooks, sessions as _sessions, ui_bridge
+from ..host.doc_state import reload_active_doc_if_stale as _reload_active_doc_if_stale
+from ..host.multimodal import multimodal_prompt as _multimodal_prompt
+from ..host.panel_proxy import PanelProxy as _PanelProxy
 from ..permissions import make_can_use_tool, clear_session_allowlist
 from ..runtime import context_builder as _context_builder
+from ..tools import short_name as _strip_prefix
 from ..worker import client as worker_client
 from . import dock_tools, runtime as cli_runtime
 
@@ -85,193 +79,11 @@ def _should_auto_plan(text: str) -> bool:
     return lower.count(",") + lower.count(" and ") + lower.count("\n- ") >= 2
 
 
-async def _multimodal_prompt(user_text: str, attachments: list[str]):
-    """Yield a single Anthropic-format streaming user message with images.
-
-    The SDK forwards each dict to the CLI transport; LiteLLM translates the
-    Anthropic image block to whatever the proxied model expects (e.g. the
-    OpenAI image_url schema for gpt-*).
-    """
-    content: list[dict[str, Any]] = []
-    if user_text:
-        content.append({"type": "text", "text": user_text})
-    for path in attachments:
-        try:
-            with open(path, "rb") as f:
-                data = f.read()
-        except OSError:
-            continue
-        mime, _ = mimetypes.guess_type(path)
-        if not mime or not mime.startswith("image/"):
-            mime = "image/png"
-        content.append(
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": mime,
-                    "data": base64.b64encode(data).decode("ascii"),
-                },
-            }
-        )
-    yield {
-        "type": "user",
-        "message": {"role": "user", "content": content},
-        "parent_tool_use_id": None,
-    }
-
-
-def _strip_prefix(name: str) -> str:
-    if isinstance(name, str) and name.startswith(_MCP_PREFIX):
-        return name[len(_MCP_PREFIX):]
-    return name
-
-
-class _PanelProxy(QtCore.QObject):
-    """Marshals messages from the worker asyncio thread onto the GUI thread.
-
-    Mirrors the signal surface the QML panel binds to in
-    :mod:`agent.ui.qml_panel`. Signals not produced by the CLI agent (e.g.
-    milestone/verification/decision events) are still declared so the
-    panel's ``hasattr`` connects don't fail; they simply never fire.
-    """
-
-    assistantText = QtCore.Signal(str)
-    thinking = QtCore.Signal(str)
-    toolUse = QtCore.Signal(str, str, object)
-    toolResult = QtCore.Signal(str, object, bool)
-    resultMsg = QtCore.Signal(object)
-    turnComplete = QtCore.Signal()
-    error = QtCore.Signal(str)
-    permissionRequest = QtCore.Signal(str, object, object)
-    askUserQuestion = QtCore.Signal(object, object)
-    sessionChanged = QtCore.Signal(str)
-
-    # Reserved for future parity with the deleted integrated runtime.
-    milestoneUpsert = QtCore.Signal(str, str, str, object, object)
-    verificationResult = QtCore.Signal(str, object)
-    decisionRecorded = QtCore.Signal(str, object)
-    compactionEvent = QtCore.Signal(object)
-    contextUsage = QtCore.Signal(int, int)
-    compactingChanged = QtCore.Signal(bool)
-    subagentSpan = QtCore.Signal(str, str, str)
-    permissionModeChanged = QtCore.Signal(str)
-    streamState = QtCore.Signal(str, bool)
-    todosUpdate = QtCore.Signal(object)
-    # Plan-mode scaffolding (M1).
-    planFile = QtCore.Signal(str, str)  # (path, markdown)
-    planExited = QtCore.Signal()
-    # Edit-approval scaffolding (M3).
-    editApprovalRequest = QtCore.Signal(str, str, str, object)  # (reqId, summary, script, cf_future)
-    # Hook lifecycle event — (event_name, payload_dict, result_dict). Consumed
-    # by W2-E to render hook activity rows; safe to leave unconnected.
-    hookEvent = QtCore.Signal(str, object, object)
-    # Active document changed — fires when the runtime's tracked workspace
-    # path moves to a new document (or to None). Consumed by W2-D's
-    # WorkspaceChip to refresh its label.
-    activeDocChanged = QtCore.Signal(str)
-    # Worker-thread rewind asks the GUI thread to reload the active document
-    # from disk after a checkpoint restore. Path is the .FCStd file.
-    docReloadRequested = QtCore.Signal(str)
-
-    def __init__(self, panel):
-        super().__init__(panel)
-        self._panel = panel
-        self.assistantText.connect(panel.append_assistant_text)
-        self.thinking.connect(panel.append_thinking)
-        self.toolUse.connect(panel.announce_tool_use)
-        self.toolResult.connect(panel.announce_tool_result)
-        self.resultMsg.connect(panel.record_result)
-        self.turnComplete.connect(panel.mark_turn_complete)
-        self.error.connect(panel.show_error)
-        self.permissionRequest.connect(self._on_permission_request)
-        self.askUserQuestion.connect(self._on_ask_user_question)
-        if hasattr(panel, "on_session_changed"):
-            self.sessionChanged.connect(panel.on_session_changed)
-        if hasattr(panel, "set_stream_state"):
-            self.streamState.connect(panel.set_stream_state)
-        if hasattr(panel, "update_todos"):
-            self.todosUpdate.connect(panel.update_todos)
-        if hasattr(panel, "upsert_milestone"):
-            self.milestoneUpsert.connect(panel.upsert_milestone)
-        if hasattr(panel, "on_plan_file"):
-            self.planFile.connect(panel.on_plan_file)
-        if hasattr(panel, "on_plan_exited"):
-            self.planExited.connect(panel.on_plan_exited)
-        self.editApprovalRequest.connect(self._on_edit_approval_request)
-        if hasattr(panel, "reload_doc"):
-            self.docReloadRequested.connect(panel.reload_doc)
-        bridge = getattr(panel, "bridge", None)
-        if bridge is not None:
-            if hasattr(bridge, "_on_context_usage"):
-                try:
-                    self.contextUsage.connect(bridge._on_context_usage)
-                except Exception:
-                    pass
-            if hasattr(bridge, "_on_compacting_changed"):
-                try:
-                    self.compactingChanged.connect(bridge._on_compacting_changed)
-                except Exception:
-                    pass
-            try:
-                self.compactionEvent.connect(panel.emit_compaction)
-            except Exception:
-                pass
-
-    def _on_edit_approval_request(self, req_id, summary, script, cf_future):
-        try:
-            self._panel.request_edit_approval_threadsafe(
-                req_id, summary, script, cf_future
-            )
-        except Exception as exc:
-            if not cf_future.done():
-                cf_future.set_exception(exc)
-
-    def _on_permission_request(self, tool_name, tool_input, cf_future):
-        try:
-            self._panel.request_permission_threadsafe(
-                _strip_prefix(tool_name), tool_input, cf_future
-            )
-        except Exception as exc:
-            if not cf_future.done():
-                cf_future.set_exception(exc)
-
-    def _on_ask_user_question(self, questions, cf_future):
-        try:
-            self._panel.ask_user_question_threadsafe(questions, cf_future)
-        except Exception as exc:
-            if not cf_future.done():
-                cf_future.set_exception(exc)
-
-
-def _reload_active_doc_if_stale() -> None:
-    """Re-open the active document so the GUI reflects subprocess writes.
-
-    The CLI agent writes geometry via ``Bash → FreeCADCmd``, which mutates
-    the ``.FCStd`` on disk while the GUI still holds the pre-Bash copy in
-    memory. We close + re-open whenever the file's mtime is newer than the
-    one we observed before the turn started.
-    """
-    doc = App.ActiveDocument
-    if doc is None:
-        return
-    path = getattr(doc, "FileName", "") or ""
-    if not path or not os.path.exists(path):
-        return
-    try:
-        name = doc.Name
-        App.closeDocument(name)
-        new_doc = App.openDocument(path)
-        App.setActiveDocument(new_doc.Name)
-        try:
-            new_doc.recompute()
-        except Exception:
-            pass
-    except Exception:
-        try:
-            doc.recompute()
-        except Exception:
-            pass
+# NOTE: _multimodal_prompt, _strip_prefix, _PanelProxy, and
+# _reload_active_doc_if_stale moved to agent.host.* at Step 9. The
+# aliases imported at the top of this module keep the old in-module names
+# working for the call sites below; Step 11 inlines those call sites to
+# use the host names directly.
 
 
 def _snapshot_active_doc() -> dict:
