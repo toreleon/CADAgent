@@ -263,7 +263,7 @@ def set_parameter(
         # uses ``value`` to disambiguate: if the query's numeric matches
         # the inch value, convert it; if it's already mm-magnitude, leave
         # alone — prevents 50.8 → 1290.32 double-conversions.
-        from .cli.verify_gate import rewrite_verify_for_unit
+        from .verify_gate import rewrite_verify_for_unit
         spec["verify"] = rewrite_verify_for_unit(str(verify), u, float(value))
     params[name] = spec
     save(doc, data)
@@ -513,10 +513,19 @@ def read_plan_file(doc) -> str:
         return ""
 
 
+_LOCKED_NOTE_KEYS = {("design_intent", "spec_from_drawing"): "spec_from_drawing_initial"}
+
+
 def write_note(doc, section: str, key: str, value) -> dict:
     data = load(doc)
     if section not in data or not isinstance(data[section], dict):
         data[section] = {}
+    locked_key = _LOCKED_NOTE_KEYS.get((section, key))
+    if locked_key and not data[section].get(locked_key):
+        # First write of a "lockable" note — snapshot it so later edits
+        # by the model can't erase the harness's source of truth (e.g. the
+        # "12×Ø0.14" / "32×R0.09" patterns the coverage check needs).
+        data[section][locked_key] = value
     data[section][key] = value
     save(doc, data)
     return {section: {key: value}}
